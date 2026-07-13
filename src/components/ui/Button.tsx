@@ -1,0 +1,116 @@
+import { type ReactNode, useRef } from 'react';
+import {
+  ActivityIndicator,
+  Animated,
+  Pressable,
+  StyleSheet,
+  Text,
+  type PressableProps,
+  type StyleProp,
+  type ViewStyle,
+} from 'react-native';
+
+import { colors, motion, radius, space, type } from '../../theme';
+
+type ButtonVariant = 'primary' | 'ghost';
+
+type ButtonProps = Omit<PressableProps, 'children' | 'style'> & {
+  children: ReactNode;
+  variant?: ButtonVariant;
+  loading?: boolean;
+  style?: StyleProp<ViewStyle>;
+};
+
+export function Button({
+  children,
+  variant = 'primary',
+  loading = false,
+  disabled,
+  style,
+  onPressIn,
+  onPressOut,
+  ...rest
+}: ButtonProps) {
+  const scale = useRef(new Animated.Value(1)).current;
+  const isDisabled = disabled || loading;
+
+  const animateTo = (value: number) => {
+    Animated.timing(scale, {
+      toValue: value,
+      duration: motion.durationFast,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  return (
+    <Animated.View style={{ transform: [{ scale }] }}>
+      <Pressable
+        accessibilityRole="button"
+        disabled={isDisabled}
+        style={({ pressed }) => [
+          styles.base,
+          variant === 'primary' ? styles.primary : styles.ghost,
+          isDisabled && styles.disabled,
+          pressed && !isDisabled && styles.pressed,
+          style,
+        ]}
+        onPressIn={(e) => {
+          animateTo(motion.pressScale);
+          onPressIn?.(e);
+        }}
+        onPressOut={(e) => {
+          animateTo(1);
+          onPressOut?.(e);
+        }}
+        {...rest}
+      >
+        {loading ? (
+          <ActivityIndicator
+            color={variant === 'primary' ? '#FFFFFF' : colors.accent}
+          />
+        ) : (
+          <Text
+            style={[
+              styles.label,
+              variant === 'primary' ? styles.primaryLabel : styles.ghostLabel,
+            ]}
+          >
+            {children}
+          </Text>
+        )}
+      </Pressable>
+    </Animated.View>
+  );
+}
+
+const styles = StyleSheet.create({
+  base: {
+    minHeight: 52,
+    borderRadius: radius.control,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: space.xl,
+  },
+  primary: {
+    backgroundColor: colors.accent,
+  },
+  ghost: {
+    backgroundColor: 'transparent',
+  },
+  pressed: {
+    opacity: 0.92,
+  },
+  disabled: {
+    opacity: 0.45,
+  },
+  label: {
+    ...type.label,
+    fontWeight: '600',
+  },
+  primaryLabel: {
+    color: '#FFFFFF',
+  },
+  ghostLabel: {
+    color: colors.accent,
+  },
+});
