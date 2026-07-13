@@ -45,7 +45,7 @@ export function GlassSurface({
         tint={blur.tint}
         style={StyleSheet.absoluteFill}
         {...(Platform.OS === 'android'
-          ? { blurMethod: 'dimezisBlurViewSdk31Plus' as const }
+          ? { experimentalBlurMethod: 'dimezisBlurView' as const }
           : null)}
       />
       <View style={styles.glassWash} pointerEvents="none" />
@@ -67,7 +67,7 @@ const styles = StyleSheet.create({
     ...elevation.whisper,
   },
   glassWash: {
-    ...StyleSheet.absoluteFill,
+    ...StyleSheet.absoluteFillObject,
     backgroundColor: colors.glass,
   },
   content: {
