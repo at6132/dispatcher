@@ -1,0 +1,28 @@
+---
+description: Dispatcher design profile — liquid glass, low-profile minimal UI
+alwaysApply: true
+---
+
+# Design profile
+
+Quiet liquid glass. Low profile. Low texture. Minimal. Easy.
+
+## Do
+
+- Calm cool mist canvas (`#EEF1F5`), soft ink (`#1C2128`), quiet steel accent (`#3E5A6B`)
+- Glass chrome via `GlassSurface` / `expo-blur` — hairline borders, soft wash, whisper shadow
+- One purpose per screen; generous spacing (`space` tokens); clear hierarchy
+- Primary actions obvious; secondary actions visually quieter
+- Use tokens from `src/theme` — never hardcode random brand colors
+
+## Don’t
+
+- No logo / wordmark chrome in-app UI
+- No “AI product” look: purple/indigo gradients, neon glow, dark cosmic themes, pill clusters, emoji flourishes, multi-layer shadows
+- No warm cream + terracotta + serif newspaper layouts
+- No busy textures, gradients as decoration, inset media cards, floating badges on media
+- Don’t card-wrap everything — glass only for bars, sheets, modals, key surfaces
+
+## Motion
+
+Soft press (`scale ~0.98`), short ease (~160–240ms). Presence, not noise.
