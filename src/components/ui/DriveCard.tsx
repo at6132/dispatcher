@@ -1,17 +1,26 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
   Image,
+  Linking,
+  Modal,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
 } from 'react-native';
-import { Check } from 'lucide-react-native';
+import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Check, X } from 'lucide-react-native';
 
 import type { DriveListItem, DriveStatus } from '../../api/drives';
 import { VEHICLE_CLASS_OPTIONS } from '../../auth/types';
+import {
+  digitsOnly,
+  formatPhoneDisplay,
+} from '../../auth/validation';
 import { colors, fonts, motion, radius, space, type } from '../../theme';
 import { Icon } from './Icon';
 
@@ -23,18 +32,33 @@ export type DriveCardProps = {
   onApply?: () => void;
   /** Open board only — show Manage when the viewer posted this drive. */
   onManage?: () => void;
+  /** Active board — mark passenger picked up (assigned → picked_up). */
+  onPickedUp?: () => void;
+  /** Active board — complete after pickup (picked_up). */
+  onComplete?: () => void;
   applying?: boolean;
   applied?: boolean;
+  pickingUp?: boolean;
+  /** After poster clears submissions — CTA label becomes Apply again. */
+  applyAgain?: boolean;
+  /** Dispatched section — map of driver apply location + status chip. */
+  showMap?: boolean;
 };
+
+const MAP_HEIGHT = 132;
+const MAP_DELTA = 0.02;
+const MAP_EXPANDED_DELTA = 0.035;
 
 function statusLabel(status: DriveStatus): string {
   switch (status) {
     case 'open':
       return 'Open';
     case 'assigned':
-      return 'Active';
+      return 'Accepted';
+    case 'picked_up':
+      return 'Picked up';
     case 'completed':
-      return 'Done';
+      return 'Completed';
     case 'cancelled':
       return 'Cancelled';
   }
@@ -53,6 +77,112 @@ function formatWhen(iso: string): string {
   });
 }
 
+async function openUrl(url: string) {
+  try {
+    await Linking.openURL(url);
+  } catch {
+    // Device may not have the app; ignore.
+  }
+}
+
+function whatsappUrl(phone: string): string {
+  const digits = digitsOnly(phone);
+  return `https://wa.me/${digits}`;
+}
+
+function telUrl(phone: string): string {
+  const trimmed = phone.trim();
+  if (trimmed.startsWith('+')) return `tel:${trimmed}`;
+  return `tel:+${digitsOnly(trimmed)}`;
+}
+
+function mapsUrls(address: string): { label: string; url: string }[] {
+  const q = encodeURIComponent(address);
+  const options: { label: string; url: string }[] = [
+    {
+      label: 'Apple Maps',
+      url:
+        Platform.OS === 'ios'
+          ? `http://maps.apple.com/?q=${q}`
+          : `geo:0,0?q=${q}`,
+    },
+    {
+      label: 'Google Maps',
+      url: `https://www.google.com/maps/search/?api=1&query=${q}`,
+    },
+    {
+      label: 'Waze',
+      url: `https://waze.com/ul?q=${q}&navigate=yes`,
+    },
+  ];
+  if (Platform.OS === 'android') {
+    // Prefer native Android map chooser first.
+    return [
+      { label: 'Maps', url: `geo:0,0?q=${q}` },
+      ...options.filter((o) => o.label !== 'Apple Maps'),
+    ];
+  }
+  return options;
+}
+
+type ChoiceSheetProps = {
+  visible: boolean;
+  title: string;
+  options: { label: string; onPress: () => void }[];
+  onClose: () => void;
+};
+
+function ChoiceSheet({ visible, title, options, onClose }: ChoiceSheetProps) {
+  return (
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      onRequestClose={onClose}
+    >
+      <Pressable
+        style={styles.choiceScrim}
+        onPress={onClose}
+        accessibilityRole="button"
+        accessibilityLabel="Dismiss"
+      >
+        <Pressable
+          style={styles.choiceCard}
+          onPress={(e) => e.stopPropagation()}
+        >
+          <Text style={styles.choiceTitle}>{title}</Text>
+          {options.map((opt) => (
+            <Pressable
+              key={opt.label}
+              accessibilityRole="button"
+              onPress={() => {
+                onClose();
+                opt.onPress();
+              }}
+              style={({ pressed }) => [
+                styles.choiceRow,
+                pressed && styles.choiceRowPressed,
+              ]}
+            >
+              <Text style={styles.choiceLabel}>{opt.label}</Text>
+            </Pressable>
+          ))}
+          <Pressable
+            accessibilityRole="button"
+            onPress={onClose}
+            style={({ pressed }) => [
+              styles.choiceCancel,
+              pressed && styles.choiceRowPressed,
+            ]}
+          >
+            <Text style={styles.choiceCancelLabel}>Cancel</Text>
+          </Pressable>
+        </Pressable>
+      </Pressable>
+    </Modal>
+  );
+}
+
 /**
  * Board listing tile — route-first drive row for Open / Active / History.
  */
@@ -61,9 +191,18 @@ export function DriveCard({
   viewerId,
   onApply,
   onManage,
+  onPickedUp,
+  onComplete,
   applying = false,
   applied = false,
+  pickingUp = false,
+  applyAgain = false,
+  showMap = false,
 }: DriveCardProps) {
+  const insets = useSafeAreaInsets();
+  const [mapExpanded, setMapExpanded] = useState(false);
+  const [phoneSheetOpen, setPhoneSheetOpen] = useState(false);
+  const [mapsSheetOpen, setMapsSheetOpen] = useState(false);
   const isPoster = viewerId != null && drive.posterId === viewerId;
   const isAssignee = viewerId != null && drive.assigneeId === viewerId;
   const party = isPoster
@@ -82,6 +221,11 @@ export function DriveCard({
     isPoster && !drive.assignee ? undefined : party?.name?.trim() || 'Driver';
   const photoUri = party?.onboarding?.selfPhotoUri;
   const initial = (partyName ?? 'Y').charAt(0).toUpperCase();
+  const mapCoordinate =
+    drive.assigneeLat != null && drive.assigneeLng != null
+      ? { latitude: drive.assigneeLat, longitude: drive.assigneeLng }
+      : null;
+  const status = statusLabel(drive.status);
 
   const placeLine =
     drive.fromPlace || drive.toPlace
@@ -111,7 +255,23 @@ export function DriveCard({
     .join(' · ');
 
   const showApply = onApply != null && !isPoster;
-  const showManage = onManage != null && isPoster;
+  /** Pickup / complete are driver actions — not for rides you dispatched. */
+  const showPickedUp =
+    onPickedUp != null && drive.status === 'assigned' && isAssignee;
+  const showComplete =
+    onComplete != null && drive.status === 'picked_up' && isAssignee;
+  const showManagePrimary =
+    onManage != null && isPoster && !showPickedUp && !showComplete;
+  const showManageSecondary =
+    onManage != null && isPoster && (showPickedUp || showComplete);
+
+  const passengerPhone = drive.passengerPhone?.trim();
+  const passengerAddress = drive.address?.trim();
+  const passengerExtra = drive.extraInfo?.trim();
+  const showPassengerContact =
+    isAssignee &&
+    (drive.status === 'assigned' || drive.status === 'picked_up') &&
+    Boolean(passengerPhone || passengerAddress || passengerExtra);
 
   const pressScale = useRef(new Animated.Value(1)).current;
   const success = useRef(new Animated.Value(applied ? 1 : 0)).current;
@@ -192,159 +352,421 @@ export function DriveCard({
     }).start();
   };
 
+  const statusBadge = (placement: 'inline' | 'onMap' | 'sheet' = 'inline') => (
+    <View
+      style={[
+        styles.badge,
+        drive.status === 'open' && styles.badgeOpen,
+        drive.status === 'assigned' && styles.badgeAssigned,
+        drive.status === 'picked_up' && styles.badgePickedUp,
+        drive.status === 'completed' && styles.badgeCompleted,
+        placement === 'onMap' && styles.badgeOnMap,
+        placement === 'sheet' && styles.badgeOnSheet,
+      ]}
+    >
+      <Text
+        style={[
+          styles.badgeLabel,
+          drive.status === 'open' && styles.badgeLabelOpen,
+          drive.status === 'assigned' && styles.badgeLabelAssigned,
+          drive.status === 'picked_up' && styles.badgeLabelPickedUp,
+          drive.status === 'completed' && styles.badgeLabelCompleted,
+          (placement === 'onMap' || placement === 'sheet') &&
+            styles.badgeLabelLifted,
+        ]}
+      >
+        {status}
+      </Text>
+    </View>
+  );
+
   return (
     <View
-      style={styles.card}
+      style={[styles.card, showMap && styles.cardWithMap]}
       accessibilityRole="summary"
-      accessibilityLabel={`${drive.routeText}, ${statusLabel(drive.status)}`}
+      accessibilityLabel={`${drive.routeText}, ${status}`}
     >
-      <View style={styles.top}>
-        <View style={styles.routeBlock}>
-          <Text style={styles.route} numberOfLines={2}>
-            {drive.routeText}
-          </Text>
-          {placeLine ? (
-            <Text style={styles.places} numberOfLines={1}>
-              {placeLine}
-            </Text>
-          ) : null}
-        </View>
-        <View
-          style={[styles.badge, drive.status === 'open' && styles.badgeOpen]}
+      {showMap ? (
+        <Pressable
+          style={styles.mapWrap}
+          accessibilityRole="button"
+          accessibilityLabel={
+            mapCoordinate
+              ? `Expand map, ${status}`
+              : 'Driver location unavailable'
+          }
+          disabled={!mapCoordinate}
+          onPress={() => setMapExpanded(true)}
         >
-          <Text
-            style={[
-              styles.badgeLabel,
-              drive.status === 'open' && styles.badgeLabelOpen,
-            ]}
-          >
-            {statusLabel(drive.status)}
-          </Text>
-        </View>
-      </View>
+          {mapCoordinate ? (
+            <MapView
+              style={styles.map}
+              provider={PROVIDER_DEFAULT}
+              pointerEvents="none"
+              scrollEnabled={false}
+              zoomEnabled={false}
+              rotateEnabled={false}
+              pitchEnabled={false}
+              toolbarEnabled={false}
+              showsCompass={false}
+              showsPointsOfInterest={false}
+              region={{
+                latitude: mapCoordinate.latitude,
+                longitude: mapCoordinate.longitude,
+                latitudeDelta: MAP_DELTA,
+                longitudeDelta: MAP_DELTA,
+              }}
+            >
+              <Marker coordinate={mapCoordinate} />
+            </MapView>
+          ) : (
+            <View style={styles.mapEmpty}>
+              <Text style={styles.mapEmptyText}>Waiting for location</Text>
+            </View>
+          )}
+          {statusBadge('onMap')}
+        </Pressable>
+      ) : null}
 
-      <View style={styles.footer}>
-        <View style={styles.party}>
-          <View style={styles.avatar}>
-            {photoUri ? (
-              <Image source={{ uri: photoUri }} style={styles.avatarImage} />
-            ) : (
-              <View style={styles.avatarEmpty}>
-                <Text style={styles.initial}>{initial}</Text>
+      {showMap && mapCoordinate ? (
+        <Modal
+          visible={mapExpanded}
+          animationType="fade"
+          presentationStyle="fullScreen"
+          onRequestClose={() => setMapExpanded(false)}
+        >
+          <View style={styles.mapModal}>
+            <MapView
+              style={styles.mapExpanded}
+              provider={PROVIDER_DEFAULT}
+              showsCompass={false}
+              showsPointsOfInterest={false}
+              toolbarEnabled={false}
+              initialRegion={{
+                latitude: mapCoordinate.latitude,
+                longitude: mapCoordinate.longitude,
+                latitudeDelta: MAP_EXPANDED_DELTA,
+                longitudeDelta: MAP_EXPANDED_DELTA,
+              }}
+            >
+              <Marker coordinate={mapCoordinate} title={partyName ?? 'Driver'} />
+            </MapView>
+
+            <View
+              style={[styles.mapModalTop, { paddingTop: insets.top + space.sm }]}
+              pointerEvents="box-none"
+            >
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close map"
+                hitSlop={12}
+                onPress={() => setMapExpanded(false)}
+                style={({ pressed }) => [
+                  styles.mapCloseBtn,
+                  pressed && styles.mapCloseBtnPressed,
+                ]}
+              >
+                <Icon icon={X} size="md" color={colors.ink} />
+              </Pressable>
+              <View style={styles.mapModalMeta} pointerEvents="none">
+                <Text style={styles.mapModalRoute} numberOfLines={2}>
+                  {drive.routeText}
+                </Text>
+                {statusBadge('sheet')}
               </View>
-            )}
+            </View>
+
+            <View
+              style={[
+                styles.mapModalBottom,
+                { paddingBottom: insets.bottom + space.md },
+              ]}
+              pointerEvents="none"
+            >
+              <Text style={styles.mapModalHint}>
+                {partyName ? `${partyName} · ${status}` : status}
+              </Text>
+            </View>
           </View>
-          <View style={styles.partyMeta}>
-            <Text style={styles.partyLabel}>{partyLabel}</Text>
-            {partyName ? (
-              <Text style={styles.partyName} numberOfLines={1}>
-                {partyName}
+        </Modal>
+      ) : null}
+
+      <View style={[styles.body, showMap && styles.bodyWithMap]}>
+        <View style={styles.top}>
+          <View style={styles.routeBlock}>
+            <Text style={styles.route} numberOfLines={2}>
+              {drive.routeText}
+            </Text>
+            {placeLine ? (
+              <Text style={styles.places} numberOfLines={1}>
+                {placeLine}
               </Text>
             ) : null}
           </View>
+          {showMap ? null : statusBadge('inline')}
         </View>
-        {meta ? (
-          <Text style={styles.meta} numberOfLines={1}>
-            {meta}
-          </Text>
-        ) : null}
-      </View>
 
-      {showManage ? (
-        <Animated.View style={{ transform: [{ scale: pressScale }] }}>
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="Manage"
-            onPress={onManage}
-            onPressIn={() => animatePress(motion.pressScale)}
-            onPressOut={() => animatePress(1)}
-            style={({ pressed }) => [
-              styles.manageBtn,
-              pressed && styles.manageBtnPressed,
-            ]}
-          >
-            <Text style={styles.manageLabel}>Manage</Text>
-          </Pressable>
-        </Animated.View>
-      ) : showApply ? (
-        applied ? (
-          <View style={styles.successWrap}>
-            <Animated.View
-              pointerEvents="none"
-              style={[
-                styles.successGlow,
-                {
-                  opacity: glow.interpolate({
-                    inputRange: [0, 1],
-                    outputRange: [0, 0.55],
-                  }),
-                  transform: [
-                    {
-                      scale: glow.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [0.92, 1.06],
-                      }),
-                    },
-                  ],
-                },
-              ]}
-            />
-            <Animated.View
-              style={[
-                styles.successBtn,
-                {
-                  opacity: success,
-                  transform: [
-                    {
-                      scale: success.interpolate({
-                        inputRange: [0, 1],
-                        outputRange: [0.92, 1],
-                      }),
-                    },
-                  ],
-                },
-              ]}
-              accessibilityRole="text"
-              accessibilityLabel="Applied"
-            >
-              <Animated.View
-                style={{
-                  transform: [
-                    { scale: checkScale },
-                    { rotate: checkSpin },
-                  ],
-                }}
+        {showPassengerContact ? (
+          <View style={styles.passengerBlock}>
+            {passengerPhone ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Passenger phone ${formatPhoneDisplay(passengerPhone)}`}
+                onPress={() => setPhoneSheetOpen(true)}
+                style={({ pressed }) => [
+                  styles.passengerHit,
+                  pressed && styles.passengerHitPressed,
+                ]}
               >
-                <View style={styles.checkCircle}>
-                  <Icon icon={Check} size="sm" color={colors.success} />
-                </View>
-              </Animated.View>
-              <Text style={styles.successLabel}>Applied</Text>
-            </Animated.View>
+                <Text style={styles.phoneBig}>
+                  {formatPhoneDisplay(passengerPhone)}
+                </Text>
+                <Text style={styles.contactHint}>Call or WhatsApp</Text>
+              </Pressable>
+            ) : null}
+            {passengerAddress ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={`Address ${passengerAddress}`}
+                onPress={() => setMapsSheetOpen(true)}
+                style={({ pressed }) => [
+                  styles.passengerHit,
+                  pressed && styles.passengerHitPressed,
+                ]}
+              >
+                <Text style={styles.addressText}>{passengerAddress}</Text>
+                <Text style={styles.contactHint}>Open in maps</Text>
+              </Pressable>
+            ) : null}
+            {passengerExtra ? (
+              <Text style={styles.extraInfo}>{passengerExtra}</Text>
+            ) : null}
           </View>
-        ) : (
+        ) : null}
+
+        <View style={styles.footer}>
+          <View style={styles.party}>
+            <View style={styles.avatar}>
+              {photoUri ? (
+                <Image source={{ uri: photoUri }} style={styles.avatarImage} />
+              ) : (
+                <View style={styles.avatarEmpty}>
+                  <Text style={styles.initial}>{initial}</Text>
+                </View>
+              )}
+            </View>
+            <View style={styles.partyMeta}>
+              <Text style={styles.partyLabel}>{partyLabel}</Text>
+              {partyName ? (
+                <Text style={styles.partyName} numberOfLines={1}>
+                  {partyName}
+                </Text>
+              ) : null}
+            </View>
+          </View>
+          {meta ? (
+            <Text style={styles.meta} numberOfLines={1}>
+              {meta}
+            </Text>
+          ) : null}
+        </View>
+
+        {showPickedUp ? (
+          <View style={styles.ctaStack}>
+            <Animated.View style={{ transform: [{ scale: pressScale }] }}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Picked up"
+                disabled={pickingUp}
+                onPress={onPickedUp}
+                onPressIn={() => animatePress(motion.pressScale)}
+                onPressOut={() => animatePress(1)}
+                style={({ pressed }) => [
+                  styles.applyBtn,
+                  pickingUp && styles.applyBtnBusy,
+                  pressed && !pickingUp && styles.applyBtnPressed,
+                ]}
+              >
+                {pickingUp ? (
+                  <ActivityIndicator color={colors.onAccent} />
+                ) : (
+                  <Text style={styles.applyLabel}>Picked up</Text>
+                )}
+              </Pressable>
+            </Animated.View>
+            {showManageSecondary ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Manage"
+                onPress={onManage}
+                style={({ pressed }) => [
+                  styles.manageBtn,
+                  pressed && styles.manageBtnPressed,
+                ]}
+              >
+                <Text style={styles.manageLabel}>Manage</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : showComplete ? (
+          <View style={styles.ctaStack}>
+            <Animated.View style={{ transform: [{ scale: pressScale }] }}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Complete drive"
+                onPress={onComplete}
+                onPressIn={() => animatePress(motion.pressScale)}
+                onPressOut={() => animatePress(1)}
+                style={({ pressed }) => [
+                  styles.applyBtn,
+                  pressed && styles.applyBtnPressed,
+                ]}
+              >
+                <Text style={styles.applyLabel}>Complete drive</Text>
+              </Pressable>
+            </Animated.View>
+            {showManageSecondary ? (
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Manage"
+                onPress={onManage}
+                style={({ pressed }) => [
+                  styles.manageBtn,
+                  pressed && styles.manageBtnPressed,
+                ]}
+              >
+                <Text style={styles.manageLabel}>Manage</Text>
+              </Pressable>
+            ) : null}
+          </View>
+        ) : showManagePrimary ? (
           <Animated.View style={{ transform: [{ scale: pressScale }] }}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Apply"
-              disabled={applying}
-              onPress={onApply}
+              accessibilityLabel="Manage"
+              onPress={onManage}
               onPressIn={() => animatePress(motion.pressScale)}
               onPressOut={() => animatePress(1)}
               style={({ pressed }) => [
-                styles.applyBtn,
-                applying && styles.applyBtnBusy,
-                pressed && !applying && styles.applyBtnPressed,
+                styles.manageBtn,
+                pressed && styles.manageBtnPressed,
               ]}
             >
-              {applying ? (
-                <ActivityIndicator color={colors.onAccent} />
-              ) : (
-                <Text style={styles.applyLabel}>Apply</Text>
-              )}
+              <Text style={styles.manageLabel}>Manage</Text>
             </Pressable>
           </Animated.View>
-        )
+        ) : showApply ? (
+          applied ? (
+            <View style={styles.successWrap}>
+              <Animated.View
+                pointerEvents="none"
+                style={[
+                  styles.successGlow,
+                  {
+                    opacity: glow.interpolate({
+                      inputRange: [0, 1],
+                      outputRange: [0, 0.55],
+                    }),
+                    transform: [
+                      {
+                        scale: glow.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0.92, 1.06],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+              />
+              <Animated.View
+                style={[
+                  styles.successBtn,
+                  {
+                    opacity: success,
+                    transform: [
+                      {
+                        scale: success.interpolate({
+                          inputRange: [0, 1],
+                          outputRange: [0.92, 1],
+                        }),
+                      },
+                    ],
+                  },
+                ]}
+                accessibilityRole="text"
+                accessibilityLabel="Applied"
+              >
+                <Animated.View
+                  style={{
+                    transform: [
+                      { scale: checkScale },
+                      { rotate: checkSpin },
+                    ],
+                  }}
+                >
+                  <View style={styles.checkCircle}>
+                    <Icon icon={Check} size="sm" color={colors.success} />
+                  </View>
+                </Animated.View>
+                <Text style={styles.successLabel}>Applied</Text>
+              </Animated.View>
+            </View>
+          ) : (
+            <Animated.View style={{ transform: [{ scale: pressScale }] }}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel={applyAgain ? 'Apply again' : 'Apply'}
+                disabled={applying}
+                onPress={onApply}
+                onPressIn={() => animatePress(motion.pressScale)}
+                onPressOut={() => animatePress(1)}
+                style={({ pressed }) => [
+                  styles.applyBtn,
+                  applying && styles.applyBtnBusy,
+                  pressed && !applying && styles.applyBtnPressed,
+                ]}
+              >
+                {applying ? (
+                  <ActivityIndicator color={colors.onAccent} />
+                ) : (
+                  <Text style={styles.applyLabel}>
+                    {applyAgain ? 'Apply again' : 'Apply'}
+                  </Text>
+                )}
+              </Pressable>
+            </Animated.View>
+          )
+        ) : null}
+      </View>
+
+      {passengerPhone ? (
+        <ChoiceSheet
+          visible={phoneSheetOpen}
+          title="Contact passenger"
+          options={[
+            {
+              label: 'Call',
+              onPress: () => void openUrl(telUrl(passengerPhone)),
+            },
+            {
+              label: 'WhatsApp',
+              onPress: () => void openUrl(whatsappUrl(passengerPhone)),
+            },
+          ]}
+          onClose={() => setPhoneSheetOpen(false)}
+        />
+      ) : null}
+
+      {passengerAddress ? (
+        <ChoiceSheet
+          visible={mapsSheetOpen}
+          title="Open address"
+          options={mapsUrls(passengerAddress).map((opt) => ({
+            label: opt.label,
+            onPress: () => void openUrl(opt.url),
+          }))}
+          onClose={() => setMapsSheetOpen(false)}
+        />
       ) : null}
     </View>
   );
@@ -358,8 +780,96 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.glassBorder,
     backgroundColor: colors.glass,
+  },
+  cardWithMap: {
+    overflow: 'hidden',
+  },
+  mapWrap: {
+    height: MAP_HEIGHT,
+    backgroundColor: colors.canvasDeep,
+  },
+  map: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  mapEmpty: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mapEmptyText: {
+    ...type.caption,
+    color: colors.faint,
+  },
+  mapModal: {
+    flex: 1,
+    backgroundColor: colors.canvasDeep,
+  },
+  mapExpanded: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  mapModalTop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    paddingHorizontal: space.md,
+    gap: space.sm,
+  },
+  mapCloseBtn: {
+    alignSelf: 'flex-start',
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: 'rgba(27, 32, 38, 0.78)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassBorder,
+  },
+  mapCloseBtnPressed: {
+    opacity: 0.88,
+  },
+  mapModalMeta: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: space.sm,
+    paddingHorizontal: space.xs,
+  },
+  mapModalRoute: {
+    flex: 1,
+    fontFamily: fonts.sansSemi,
+    fontSize: 17,
+    letterSpacing: -0.2,
+    lineHeight: 22,
+    color: colors.ink,
+    textShadowColor: 'rgba(0, 0, 0, 0.45)',
+    textShadowOffset: { width: 0, height: 1 },
+    textShadowRadius: 3,
+  },
+  mapModalBottom: {
+    position: 'absolute',
+    left: space.md,
+    right: space.md,
+    bottom: 0,
+  },
+  mapModalHint: {
+    ...type.caption,
+    color: colors.inkSoft,
+    paddingHorizontal: space.md,
+    paddingVertical: space.sm,
+    borderRadius: radius.control,
+    overflow: 'hidden',
+    backgroundColor: 'rgba(27, 32, 38, 0.78)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassBorder,
+    alignSelf: 'flex-start',
+  },
+  body: {
     padding: space.md,
     gap: space.md,
+  },
+  bodyWithMap: {
+    paddingTop: space.md,
   },
   top: {
     flexDirection: 'row',
@@ -387,8 +897,33 @@ const styles = StyleSheet.create({
     borderRadius: radius.sm,
     backgroundColor: colors.accentMuted,
   },
+  badgeOnMap: {
+    position: 'absolute',
+    top: space.sm,
+    right: space.sm,
+    backgroundColor: 'rgba(27, 32, 38, 0.78)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassBorder,
+  },
+  badgeOnSheet: {
+    backgroundColor: 'rgba(27, 32, 38, 0.78)',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassBorder,
+  },
+  badgeLabelLifted: {
+    color: colors.ink,
+  },
   badgeOpen: {
     backgroundColor: 'rgba(127, 168, 148, 0.18)',
+  },
+  badgeAssigned: {
+    backgroundColor: 'rgba(176, 194, 204, 0.22)',
+  },
+  badgePickedUp: {
+    backgroundColor: 'rgba(176, 194, 204, 0.28)',
+  },
+  badgeCompleted: {
+    backgroundColor: 'rgba(127, 168, 148, 0.22)',
   },
   badgeLabel: {
     ...type.label,
@@ -396,6 +931,15 @@ const styles = StyleSheet.create({
     textTransform: 'uppercase',
   },
   badgeLabelOpen: {
+    color: colors.success,
+  },
+  badgeLabelAssigned: {
+    color: colors.inkSoft,
+  },
+  badgeLabelPickedUp: {
+    color: colors.ink,
+  },
+  badgeLabelCompleted: {
     color: colors.success,
   },
   footer: {
@@ -448,6 +992,9 @@ const styles = StyleSheet.create({
     ...type.caption,
     color: colors.muted,
     paddingLeft: space.xs,
+  },
+  ctaStack: {
+    gap: space.sm,
   },
   applyBtn: {
     minHeight: 52,
@@ -521,5 +1068,91 @@ const styles = StyleSheet.create({
     fontSize: 15,
     letterSpacing: -0.1,
     color: colors.success,
+  },
+  passengerBlock: {
+    gap: space.sm,
+    paddingTop: space.xs,
+  },
+  passengerHit: {
+    gap: 2,
+  },
+  passengerHitPressed: {
+    opacity: 0.85,
+  },
+  phoneBig: {
+    fontFamily: fonts.sansSemi,
+    fontSize: 26,
+    letterSpacing: -0.4,
+    lineHeight: 32,
+    color: colors.ink,
+  },
+  addressText: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 16,
+    letterSpacing: -0.2,
+    lineHeight: 22,
+    color: colors.inkSoft,
+  },
+  contactHint: {
+    ...type.caption,
+    color: colors.faint,
+  },
+  extraInfo: {
+    ...type.body,
+    color: colors.muted,
+    marginTop: space.xs,
+  },
+  choiceScrim: {
+    flex: 1,
+    justifyContent: 'flex-end',
+    backgroundColor: 'rgba(27, 32, 38, 0.72)',
+    paddingHorizontal: space.lg,
+    paddingBottom: space.xl,
+  },
+  choiceCard: {
+    width: '100%',
+    maxWidth: 440,
+    alignSelf: 'center',
+    gap: space.xs,
+    padding: space.md,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassBorder,
+    backgroundColor: colors.canvasLift,
+  },
+  choiceTitle: {
+    ...type.label,
+    color: colors.faint,
+    textTransform: 'uppercase',
+    paddingHorizontal: space.sm,
+    paddingVertical: space.sm,
+  },
+  choiceRow: {
+    minHeight: 48,
+    borderRadius: radius.control,
+    justifyContent: 'center',
+    paddingHorizontal: space.md,
+    backgroundColor: colors.accentMuted,
+  },
+  choiceRowPressed: {
+    opacity: 0.88,
+  },
+  choiceLabel: {
+    fontFamily: fonts.sansSemi,
+    fontSize: 16,
+    letterSpacing: -0.1,
+    color: colors.ink,
+  },
+  choiceCancel: {
+    minHeight: 48,
+    borderRadius: radius.control,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: space.xs,
+  },
+  choiceCancelLabel: {
+    fontFamily: fonts.sansMedium,
+    fontSize: 15,
+    color: colors.muted,
   },
 });

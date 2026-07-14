@@ -21,6 +21,8 @@ import {
   shouldTelegramAlert,
   telegramAlertsEnabled,
 } from './lib/telegram.js';
+import { adminRoutes } from './routes/admin/index.js';
+import { analyticsRoutes } from './routes/analytics.js';
 import { authRoutes } from './routes/auth.js';
 import {
   balanceRoutes,
@@ -212,6 +214,8 @@ export async function buildApp() {
   await app.register(driveRoutes, { prefix: '/v1/drives' });
   await app.register(balanceRoutes, { prefix: '/v1/balances' });
   await app.register(profileRoutes, { prefix: '/v1/profiles' });
+  await app.register(adminRoutes, { prefix: '/v1/admin' });
+  await app.register(analyticsRoutes, { prefix: '/v1/analytics' });
 
   app.addHook('onSend', async (_req, reply, payload) => {
     reply.removeHeader('x-powered-by');
@@ -310,6 +314,7 @@ export async function buildApp() {
     nodeEnv: env.NODE_ENV,
     s3Enabled: env.s3Enabled,
     telegramAlerts: telegramAlertsEnabled(),
+    adminEnabled: env.adminEnabled,
     logLevel:
       env.LOG_LEVEL ?? (env.NODE_ENV === 'production' ? 'info' : 'debug'),
   });

@@ -5,12 +5,14 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { idempotencyKeys } from '../db/schema.js';
 import { AppError, sendError } from '../lib/errors.js';
+import { trackEvent } from '../lib/analytics.js';
 import { logDomain, logDomainWarn, shortId } from '../lib/log.js';
 import { assertClientLimits, requireJsonContentType } from '../lib/security.js';
 import { requireAuth, requireUser } from '../middleware/auth.js';
 import {
   acceptApplication,
   applyToDrive,
+  clearApplications,
   completeDrive,
   createDrive,
   getDrive,
@@ -18,6 +20,7 @@ import {
   listApplications,
   listBalances,
   listDrives,
+  markDrivePickedUp,
   settleBalance,
   unassignDrive,
   updateDrive,
@@ -140,6 +143,12 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
         requestId: request.id,
         userId: shortId(user.id),
         status: result.status,
+      });
+      trackEvent({
+        name: 'drive.create',
+        userId: user.id,
+        requestId: request.id,
+        ip: request.ip,
       });
       return reply.status(result.status).send(result.body);
     } catch (err) {
@@ -274,6 +283,13 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
         userId: shortId(user.id),
         driveId: shortId(params.data.id),
       });
+      trackEvent({
+        name: 'drive.apply',
+        userId: user.id,
+        requestId: request.id,
+        ip: request.ip,
+        props: { driveId: params.data.id },
+      });
       return reply.status(201).send({
         application: {
           id: appRow!.id,
@@ -297,6 +313,34 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
       const user = requireUser(request);
       const items = await listApplications(user.id, params.data.id);
       return reply.send({ items });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.post('/:id/applications/clear', async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
+    try {
+      const user = requireUser(request);
+      await assertClientLimits(request, reply, {
+        name: 'drive_clear_applications',
+        ipLimit: 40,
+        userLimit: 30,
+        windowSec: 3600,
+        failClosed: true,
+      });
+      const result = await clearApplications(user.id, params.data.id);
+      logDomain(request.log, 'drives.clear_applications.ok', {
+        requestId: request.id,
+        userId: shortId(user.id),
+        driveId: shortId(params.data.id),
+        cleared: result.cleared,
+      });
+      return reply.send(result);
     } catch (err) {
       if (err instanceof AppError) {
         return sendError(reply, err.statusCode, err.message, err.code);
@@ -340,6 +384,13 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
         userId: shortId(user.id),
         driveId: shortId(params.data.id),
       });
+      trackEvent({
+        name: 'drive.accept',
+        userId: user.id,
+        requestId: request.id,
+        ip: request.ip,
+        props: { driveId: params.data.id },
+      });
       return reply.status(result.status).send(result.body);
     } catch (err) {
       if (err instanceof AppError) {
@@ -362,6 +413,45 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
       return reply.send({ drive });
     } catch (err) {
       if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.post('/:id/picked-up', async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
+    try {
+      const user = requireUser(request);
+      await assertClientLimits(request, reply, {
+        name: 'drive_picked_up',
+        ipLimit: 60,
+        userLimit: 40,
+        windowSec: 3600,
+        failClosed: true,
+      });
+      const result = await withIdempotency(
+        user.id,
+        request as never,
+        reply as never,
+        async () => {
+          const drive = await markDrivePickedUp(user.id, params.data.id);
+          return { status: 200, body: { drive } };
+        },
+      );
+      logDomain(request.log, 'drives.picked_up.ok', {
+        requestId: request.id,
+        userId: shortId(user.id),
+        driveId: shortId(params.data.id),
+      });
+      return reply.status(result.status).send(result.body);
+    } catch (err) {
+      if (err instanceof AppError) {
+        logDomainWarn(request.log, 'drives.picked_up.fail', {
+          requestId: request.id,
+          code: err.code,
+        });
         return sendError(reply, err.statusCode, err.message, err.code);
       }
       throw err;
@@ -404,6 +494,13 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
         userId: shortId(user.id),
         driveId: shortId(params.data.id),
         costCents: body.data.costCents,
+      });
+      trackEvent({
+        name: 'drive.complete',
+        userId: user.id,
+        requestId: request.id,
+        ip: request.ip,
+        props: { driveId: params.data.id, costCents: body.data.costCents },
       });
       return reply.status(result.status).send(result.body);
     } catch (err) {
@@ -472,6 +569,13 @@ export const balanceRoutes: FastifyPluginAsync = async (app) => {
       });
       const user = requireUser(request);
       const balance = await settleBalance(user.id, params.data.id);
+      trackEvent({
+        name: 'balance.settle',
+        userId: user.id,
+        requestId: request.id,
+        ip: request.ip,
+        props: { balanceId: params.data.id },
+      });
       return reply.send({
         balance: {
           id: balance.id,

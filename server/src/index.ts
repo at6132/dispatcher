@@ -10,6 +10,7 @@ import {
   telegramAlertsEnabled,
 } from './lib/telegram.js';
 import { startSundayLockWorker } from './workers/sundayLock.js';
+import { startTelegramAdminWorker } from './workers/telegramAdmin.js';
 
 async function main() {
   const migrationsFolder = path.join(process.cwd(), 'drizzle');
@@ -26,10 +27,12 @@ async function main() {
 
   const app = await buildApp();
   const worker = startSundayLockWorker(app.log);
+  const tgAdmin = startTelegramAdminWorker(app.log);
 
   const shutdown = async (signal: string) => {
     app.log.info({ event: 'boot.shutdown', signal }, 'boot.shutdown');
     clearInterval(worker);
+    tgAdmin.stop();
     await app.close();
     await closeRedis();
     await closeDb();

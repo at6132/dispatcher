@@ -23,6 +23,7 @@ export const vehicleClassEnum = pgEnum('vehicle_class', [
 export const driveStatusEnum = pgEnum('drive_status', [
   'open',
   'assigned',
+  'picked_up',
   'completed',
   'cancelled',
 ]);
@@ -31,6 +32,7 @@ export const applicationStatusEnum = pgEnum('application_status', [
   'pending',
   'accepted',
   'rejected',
+  'cleared',
 ]);
 export const balanceStatusEnum = pgEnum('balance_status', ['open', 'settled']);
 export const photoKindEnum = pgEnum('photo_kind', [
@@ -233,5 +235,139 @@ export const idempotencyKeys = pgTable(
   (t) => [
     uniqueIndex('idempotency_user_key_uidx').on(t.userId, t.key),
     index('idempotency_expires_idx').on(t.expiresAt),
+  ],
+);
+
+export const adminChallengeStatusEnum = pgEnum('admin_challenge_status', [
+  'pending',
+  'approved',
+  'denied',
+  'expired',
+]);
+
+export const actorTypeEnum = pgEnum('actor_type', [
+  'admin',
+  'system',
+  'user',
+]);
+
+export const securitySeverityEnum = pgEnum('security_severity', [
+  'info',
+  'warn',
+  'critical',
+]);
+
+export const adminLoginChallenges = pgTable(
+  'admin_login_challenges',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    shortCode: text('short_code').notNull(),
+    status: adminChallengeStatusEnum('status').notNull().default('pending'),
+    ip: text('ip').notNull(),
+    userAgent: text('user_agent'),
+    approvedByChatId: text('approved_by_chat_id'),
+    approvedAt: timestamp('approved_at', { withTimezone: true }),
+    sessionTokenHash: text('session_token_hash'),
+    sessionIssuedAt: timestamp('session_issued_at', { withTimezone: true }),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('admin_challenges_short_code_uidx').on(t.shortCode),
+    index('admin_challenges_status_created_idx').on(t.status, t.createdAt),
+  ],
+);
+
+export const adminSessions = pgTable(
+  'admin_sessions',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    tokenHash: text('token_hash').notNull(),
+    challengeId: uuid('challenge_id').references(() => adminLoginChallenges.id, {
+      onDelete: 'set null',
+    }),
+    ip: text('ip').notNull(),
+    userAgent: text('user_agent'),
+    expiresAt: timestamp('expires_at', { withTimezone: true }).notNull(),
+    revokedAt: timestamp('revoked_at', { withTimezone: true }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    lastSeenAt: timestamp('last_seen_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('admin_sessions_token_hash_uidx').on(t.tokenHash),
+    index('admin_sessions_expires_idx').on(t.expiresAt),
+  ],
+);
+
+export const auditEvents = pgTable(
+  'audit_events',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+    actorType: actorTypeEnum('actor_type').notNull(),
+    actorId: text('actor_id'),
+    sessionId: uuid('session_id'),
+    action: text('action').notNull(),
+    entityType: text('entity_type'),
+    entityId: text('entity_id'),
+    requestId: text('request_id'),
+    ip: text('ip'),
+    userAgent: text('user_agent'),
+    beforeJson: text('before_json'),
+    afterJson: text('after_json'),
+    metaJson: text('meta_json'),
+  },
+  (t) => [
+    index('audit_events_at_idx').on(t.at),
+    index('audit_events_action_idx').on(t.action),
+    index('audit_events_entity_idx').on(t.entityType, t.entityId),
+    index('audit_events_request_idx').on(t.requestId),
+    index('audit_events_ip_idx').on(t.ip),
+  ],
+);
+
+export const analyticsEvents = pgTable(
+  'analytics_events',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+    name: text('name').notNull(),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    anonymousId: text('anonymous_id'),
+    requestId: text('request_id'),
+    ip: text('ip'),
+    propsJson: text('props_json'),
+  },
+  (t) => [
+    index('analytics_events_name_at_idx').on(t.name, t.at),
+    index('analytics_events_user_idx').on(t.userId),
+    index('analytics_events_at_idx').on(t.at),
+  ],
+);
+
+export const securityEvents = pgTable(
+  'security_events',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    at: timestamp('at', { withTimezone: true }).notNull().defaultNow(),
+    kind: text('kind').notNull(),
+    severity: securitySeverityEnum('severity').notNull().default('info'),
+    ip: text('ip'),
+    userId: uuid('user_id').references(() => users.id, { onDelete: 'set null' }),
+    adminChallengeId: uuid('admin_challenge_id'),
+    requestId: text('request_id'),
+    detailJson: text('detail_json'),
+  },
+  (t) => [
+    index('security_events_at_idx').on(t.at),
+    index('security_events_kind_idx').on(t.kind),
+    index('security_events_ip_idx').on(t.ip),
+    index('security_events_request_idx').on(t.requestId),
   ],
 );

@@ -2,6 +2,7 @@ import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 
 import { AppError, sendError } from '../lib/errors.js';
+import { trackEvent } from '../lib/analytics.js';
 import { logDomain, logDomainWarn, shortId } from '../lib/log.js';
 import { assertClientLimits, requireJsonContentType } from '../lib/security.js';
 import { requireAuth, requireUser } from '../middleware/auth.js';
@@ -104,6 +105,14 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
         userId: shortId(dto.id),
         onboardingComplete: dto.onboardingComplete,
       });
+      if (dto.onboardingComplete) {
+        trackEvent({
+          name: 'onboarding.complete',
+          userId: dto.id,
+          requestId: request.id,
+          ip: request.ip,
+        });
+      }
       return reply.send({ user: dto });
     } catch (err) {
       if (err instanceof AppError) {

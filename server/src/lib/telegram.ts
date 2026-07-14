@@ -219,3 +219,34 @@ export function notifyTelegramForce(input: TelegramAlertInput): void {
     force: true,
   });
 }
+
+/** Send raw Markdown text to all approved chats. Never throws. */
+export async function sendTelegramRaw(text: string): Promise<void> {
+  try {
+    const token = botToken();
+    const ids = chatIds();
+    if (!token || !ids.length) return;
+    await Promise.allSettled(ids.map((id) => sendToChat(token, id, text)));
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(
+      JSON.stringify({
+        event: 'telegram.raw.fail',
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    );
+  }
+}
+
+export function getTelegramBotToken(): string | undefined {
+  return botToken();
+}
+
+export function getApprovedTelegramChatIds(): string[] {
+  return chatIds();
+}
+
+export function isApprovedTelegramChat(chatId: string | number): boolean {
+  const id = String(chatId);
+  return chatIds().includes(id);
+}

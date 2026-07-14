@@ -38,11 +38,22 @@ const envSchema = z.object({
   TELEGRAM_CHAT_IDS: z.string().optional(),
   /** Min HTTP status that triggers a text (default 500; set 400 to include client errors) */
   TELEGRAM_ALERT_MIN_STATUS: z.coerce.number().int().default(500),
+  /** Ops admin console password (Telegram /allow still required) */
+  ADMIN_PASSWORD: z.string().min(4).optional(),
+  /** Dedicated JWT secret for admin sessions (min 32). Falls back to JWT_ACCESS_SECRET in dev only. */
+  ADMIN_JWT_SECRET: z.string().min(32).optional(),
+  ADMIN_SESSION_TTL_SEC: z.coerce.number().int().positive().default(3600),
+  ADMIN_CHALLENGE_TTL_SEC: z.coerce.number().int().positive().default(300),
+  /** Optional PostHog project key — mirrors analytics events when set */
+  POSTHOG_API_KEY: z.string().optional(),
+  POSTHOG_HOST: z.string().url().optional(),
 });
 
 export type Env = z.infer<typeof envSchema> & {
   s3Enabled: boolean;
   telegramEnabled: boolean;
+  adminEnabled: boolean;
+  adminJwtSecret: string;
 };
 
 function loadEnv(): Env {
@@ -66,7 +77,25 @@ function loadEnv(): Env {
     .map((s) => s.trim())
     .filter(Boolean);
   const telegramEnabled = Boolean(token && chats.length > 0);
-  return { ...data, s3Enabled, telegramEnabled };
+  const adminEnabled = Boolean(data.ADMIN_PASSWORD);
+  const adminJwtSecret =
+    data.ADMIN_JWT_SECRET ??
+    (data.NODE_ENV === 'production'
+      ? ''
+      : data.JWT_ACCESS_SECRET);
+  if (adminEnabled && data.NODE_ENV === 'production' && !data.ADMIN_JWT_SECRET) {
+    throw new Error(
+      'Invalid environment: ADMIN_JWT_SECRET is required in production when ADMIN_PASSWORD is set',
+    );
+  }
+  return {
+    ...data,
+    s3Enabled,
+    telegramEnabled,
+    adminEnabled,
+    adminJwtSecret:
+      adminJwtSecret || data.JWT_ACCESS_SECRET,
+  };
 }
 
 export const env = loadEnv();

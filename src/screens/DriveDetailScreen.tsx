@@ -21,6 +21,7 @@ import { mapApiError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
 import { formatPhoneDisplay } from '../auth/validation';
 import { Button } from '../components/ui/Button';
+import { getCachedCoordinate } from '../components/ui/getCachedCoordinate';
 import { LoadingHint } from '../components/ui/LoadingHint';
 import { TextField } from '../components/ui/TextField';
 import { colors, fonts, space, type } from '../theme';
@@ -36,7 +37,9 @@ function statusCopy(status: Drive['status']): string {
     case 'open':
       return 'Open on the board';
     case 'assigned':
-      return 'Active';
+      return 'Accepted — waiting for pickup';
+    case 'picked_up':
+      return 'Picked up';
     case 'completed':
       return 'Completed';
     case 'cancelled':
@@ -63,7 +66,7 @@ export function DriveDetailScreen({
   const [actionError, setActionError] = useState<string | null>(null);
   const [applying, setApplying] = useState(false);
   const [completing, setCompleting] = useState(false);
-  const [costDollars, setCostDollars] = useState('');
+  const [profitDollars, setProfitDollars] = useState('');
 
   const load = useCallback(async () => {
     setError(null);
@@ -92,17 +95,25 @@ export function DriveDetailScreen({
 
   const isPoster = user?.id != null && drive?.posterId === user.id;
   const isAssignee = user?.id != null && drive?.assigneeId === user.id;
+  const appStatus = drive?.viewerApplicationStatus;
+  const hasApplied = appStatus === 'pending' || appStatus === 'accepted';
+  const canApplyAgain = appStatus === 'cleared';
   const canApply =
-    drive?.status === 'open' && user?.id != null && !isPoster;
+    drive?.status === 'open' &&
+    user?.id != null &&
+    !isPoster &&
+    !hasApplied &&
+    appStatus !== 'rejected';
   const canComplete =
-    drive?.status === 'assigned' && (isPoster || isAssignee);
+    drive?.status === 'picked_up' && (isPoster || isAssignee);
 
   const onApply = async () => {
     if (!drive) return;
     setActionError(null);
     setApplying(true);
     try {
-      await applyToDrive(drive.id);
+      const coords = await getCachedCoordinate();
+      await applyToDrive(drive.id, coords ?? undefined);
       await load();
       onChanged?.();
     } catch (err) {
@@ -114,9 +125,10 @@ export function DriveDetailScreen({
 
   const onComplete = async () => {
     if (!drive) return;
-    const dollars = Number.parseFloat(costDollars.trim());
+    const cleaned = profitDollars.trim().replace(/[$,\s]/g, '');
+    const dollars = Number.parseFloat(cleaned);
     if (!Number.isFinite(dollars) || dollars < 0) {
-      setActionError('Enter the trip cost in dollars.');
+      setActionError('Enter the profit in dollars.');
       return;
     }
     const costCents = Math.round(dollars * 100);
@@ -211,23 +223,12 @@ export function DriveDetailScreen({
               </View>
             ) : null}
 
-            {drive.status === 'completed' ? (
+            {drive.status === 'completed' && drive.costCents != null ? (
               <View style={styles.section}>
-                <Text style={styles.sectionLabel}>Trip</Text>
-                {drive.costCents != null ? (
-                  <Text style={styles.row}>
-                    Cost{' '}
-                    <Text style={styles.rowStrong}>
-                      {formatMoney(drive.costCents)}
-                    </Text>
-                  </Text>
-                ) : null}
-                {drive.miles ? (
-                  <Text style={styles.rowMuted}>{drive.miles} mi</Text>
-                ) : null}
-                {drive.completeNote ? (
-                  <Text style={styles.rowMuted}>{drive.completeNote}</Text>
-                ) : null}
+                <Text style={styles.sectionLabel}>Profit</Text>
+                <Text style={styles.rowStrong}>
+                  {formatMoney(drive.costCents)}
+                </Text>
               </View>
             ) : null}
 
@@ -238,9 +239,13 @@ export function DriveDetailScreen({
                   disabled={applying}
                   onPress={() => void onApply()}
                 >
-                  Apply for this drive
+                  {canApplyAgain ? 'Apply again' : 'Apply for this drive'}
                 </Button>
               </View>
+            ) : null}
+
+            {drive.status === 'open' && hasApplied && !isPoster ? (
+              <Text style={styles.hint}>You’ve applied for this drive.</Text>
             ) : null}
 
             {drive.status === 'open' && isPoster ? (
@@ -253,9 +258,9 @@ export function DriveDetailScreen({
               <View style={styles.actions}>
                 <Text style={styles.sectionLabel}>Complete</Text>
                 <TextField
-                  label="Trip cost ($)"
-                  value={costDollars}
-                  onChangeText={setCostDollars}
+                  label="Profit ($)"
+                  value={profitDollars}
+                  onChangeText={setProfitDollars}
                   keyboardType="decimal-pad"
                   placeholder="0.00"
                   editable={!completing}
@@ -265,7 +270,7 @@ export function DriveDetailScreen({
                   disabled={completing}
                   onPress={() => void onComplete()}
                 >
-                  Mark completed
+                  Mark complete
                 </Button>
               </View>
             ) : null}

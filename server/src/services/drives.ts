@@ -1,4 +1,4 @@
-import { and, desc, eq, ne, sql } from 'drizzle-orm';
+import { and, desc, eq, inArray, lte, ne, or, sql } from 'drizzle-orm';
 
 import { db } from '../db/client.js';
 import {
@@ -22,7 +22,9 @@ function canSeePassenger(drive: {
   if (viewerId === drive.posterId) return true;
   if (
     drive.assigneeId === viewerId &&
-    (drive.status === 'assigned' || drive.status === 'completed')
+    (drive.status === 'assigned' ||
+      drive.status === 'picked_up' ||
+      drive.status === 'completed')
   ) {
     return true;
   }
@@ -35,7 +37,7 @@ export type DriveDto = {
   routeText: string;
   fromPlace?: string;
   toPlace?: string;
-  status: 'open' | 'assigned' | 'completed' | 'cancelled';
+  status: 'open' | 'assigned' | 'picked_up' | 'completed' | 'cancelled';
   assigneeId?: string;
   passengerPhone?: string;
   address?: string;
@@ -51,17 +53,23 @@ export type DriveDto = {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  /** Viewer's application on this drive, if any. */
+  viewerApplicationStatus?: 'pending' | 'accepted' | 'rejected' | 'cleared';
 };
 
 /** Board list row — drive + public party profiles for the feed. */
 export type DriveListItemDto = DriveDto & {
   poster: Awaited<ReturnType<typeof toPublicProfile>>;
   assignee?: Awaited<ReturnType<typeof toPublicProfile>>;
+  /** Accepted applicant location (apply-time) — for poster map on active cards. */
+  assigneeLat?: number;
+  assigneeLng?: number;
 };
 
 function mapDrive(
   row: typeof drives.$inferSelect,
   viewerId: string,
+  viewerApplicationStatus?: DriveDto['viewerApplicationStatus'],
 ): DriveDto {
   const unlocked = canSeePassenger(row, viewerId);
   return {
@@ -86,7 +94,24 @@ function mapDrive(
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     ...(row.completedAt ? { completedAt: row.completedAt.toISOString() } : {}),
+    ...(viewerApplicationStatus
+      ? { viewerApplicationStatus }
+      : {}),
   };
+}
+
+async function loadViewerApplicationStatus(
+  viewerId: string,
+  driveId: string,
+): Promise<DriveDto['viewerApplicationStatus'] | undefined> {
+  const [app] = await db
+    .select({ status: applications.status })
+    .from(applications)
+    .where(
+      and(eq(applications.driveId, driveId), eq(applications.driverId, viewerId)),
+    )
+    .limit(1);
+  return app?.status;
 }
 
 const vehicleClasses = [
@@ -199,6 +224,24 @@ export async function updateDrive(
     throw new AppError(409, 'Only open drives can be edited', 'drive_not_open');
   }
 
+  const [openApp] = await db
+    .select({ id: applications.id })
+    .from(applications)
+    .where(
+      and(
+        eq(applications.driveId, driveId),
+        inArray(applications.status, ['pending', 'rejected']),
+      ),
+    )
+    .limit(1);
+  if (openApp) {
+    throw new AppError(
+      409,
+      'Clear submissions before editing details — applicants must apply again.',
+      'has_applications',
+    );
+  }
+
   const [poster] = await db
     .select()
     .from(users)
@@ -268,9 +311,32 @@ export async function listDrives(
     conditions.push(eq(drives.hiddenByPoster, false));
   } else if (query.status === 'open') {
     conditions.push(eq(drives.status, 'open'));
+    // Match viewer vehicle: same class, seats needed ≤ driver seats.
+    // Posters still see their own open posts to manage applicants.
+    const [profile] = await db
+      .select({
+        vehicleClass: driverProfiles.vehicleClass,
+        seats: driverProfiles.seats,
+      })
+      .from(driverProfiles)
+      .where(eq(driverProfiles.userId, viewerId))
+      .limit(1);
+    if (profile) {
+      conditions.push(
+        or(
+          eq(drives.posterId, viewerId),
+          and(
+            eq(drives.vehicleClass, profile.vehicleClass),
+            lte(drives.seats, profile.seats),
+          ),
+        )!,
+      );
+    }
   } else if (query.status === 'assigned' || query.status === 'active') {
-    // Active / scheduled for the viewer — assigned drives they're in
-    conditions.push(eq(drives.status, 'assigned'));
+    // Active board — assigned or picked-up drives the viewer is in
+    conditions.push(
+      sql`${drives.status} IN ('assigned', 'picked_up')`,
+    );
     conditions.push(
       sql`(${drives.posterId} = ${viewerId} OR ${drives.assigneeId} = ${viewerId})`,
     );
@@ -320,6 +386,61 @@ export async function listDrives(
     }),
   );
 
+  const viewerAppByDrive = new Map<string, NonNullable<DriveDto['viewerApplicationStatus']>>();
+  const assigneeCoordsByDrive = new Map<string, { lat: number; lng: number }>();
+  if (slice.length > 0) {
+    const driveIds = slice.map((r) => r.id);
+    const viewerApps = await db
+      .select({
+        driveId: applications.driveId,
+        status: applications.status,
+      })
+      .from(applications)
+      .where(
+        and(
+          eq(applications.driverId, viewerId),
+          inArray(applications.driveId, driveIds),
+        ),
+      );
+    for (const app of viewerApps) {
+      viewerAppByDrive.set(app.driveId, app.status);
+    }
+
+    const assignedIds = slice
+      .filter((r) => r.assigneeId != null)
+      .map((r) => r.id);
+    if (assignedIds.length > 0) {
+      const byId = new Map(slice.map((r) => [r.id, r]));
+      const acceptedApps = await db
+        .select({
+          driveId: applications.driveId,
+          driverId: applications.driverId,
+          lat: applications.lat,
+          lng: applications.lng,
+        })
+        .from(applications)
+        .where(
+          and(
+            inArray(applications.driveId, assignedIds),
+            eq(applications.status, 'accepted'),
+          ),
+        );
+      for (const app of acceptedApps) {
+        const drive = byId.get(app.driveId);
+        if (!drive?.assigneeId || drive.assigneeId !== app.driverId) continue;
+        // Apply location for parties only (poster map + assignee).
+        if (drive.posterId !== viewerId && drive.assigneeId !== viewerId) {
+          continue;
+        }
+        if (app.lat == null || app.lng == null) continue;
+        const lat = Number(app.lat);
+        const lng = Number(app.lng);
+        if (!Number.isFinite(lat) || !Number.isFinite(lng)) continue;
+        assigneeCoordsByDrive.set(app.driveId, { lat, lng });
+      }
+    }
+  }
+
   const items: DriveListItemDto[] = slice.map((row) => {
     const poster = profiles.get(row.posterId) ?? {
       id: row.posterId,
@@ -327,10 +448,14 @@ export async function listDrives(
       onboardingComplete: false,
     };
     const assignee = row.assigneeId ? profiles.get(row.assigneeId) : undefined;
+    const coords = assigneeCoordsByDrive.get(row.id);
     return {
-      ...mapDrive(row, viewerId),
+      ...mapDrive(row, viewerId, viewerAppByDrive.get(row.id)),
       poster,
       ...(assignee ? { assignee } : {}),
+      ...(coords
+        ? { assigneeLat: coords.lat, assigneeLng: coords.lng }
+        : {}),
     };
   });
 
@@ -347,18 +472,19 @@ export async function getDrive(viewerId: string, driveId: string): Promise<Drive
   if (!row) throw new AppError(404, 'Drive not found', 'drive_not_found');
 
   const isParty = row.posterId === viewerId || row.assigneeId === viewerId;
+  const viewerApplicationStatus = await loadViewerApplicationStatus(viewerId, driveId);
   // Open board is public to authenticated users; assigned/completed only to parties
   // (completed also visible on public completed feed, but detail still party-or-completed)
   if (row.status === 'open') {
-    return mapDrive(row, viewerId);
+    return mapDrive(row, viewerId, viewerApplicationStatus);
   }
   if (row.status === 'completed' && !row.hiddenByPoster) {
-    return mapDrive(row, viewerId);
+    return mapDrive(row, viewerId, viewerApplicationStatus);
   }
   if (!isParty) {
     throw new AppError(404, 'Drive not found', 'drive_not_found');
   }
-  return mapDrive(row, viewerId);
+  return mapDrive(row, viewerId, viewerApplicationStatus);
 }
 
 export async function applyToDrive(
@@ -390,14 +516,71 @@ export async function applyToDrive(
         throw new AppError(400, 'Cannot apply to your own drive', 'cannot_self_apply');
       }
 
+      const [profile] = await tx
+        .select({
+          vehicleClass: driverProfiles.vehicleClass,
+          seats: driverProfiles.seats,
+        })
+        .from(driverProfiles)
+        .where(eq(driverProfiles.userId, driverId))
+        .limit(1);
+      if (
+        !profile ||
+        profile.vehicleClass !== drive.vehicleClass ||
+        profile.seats < drive.seats
+      ) {
+        throw new AppError(
+          403,
+          'Your vehicle doesn’t match this drive (class or seats).',
+          'vehicle_mismatch',
+        );
+      }
+
+      const lat = input.lat != null ? String(input.lat) : undefined;
+      const lng = input.lng != null ? String(input.lng) : undefined;
+
+      const [existing] = await tx
+        .select()
+        .from(applications)
+        .where(
+          and(eq(applications.driveId, driveId), eq(applications.driverId, driverId)),
+        )
+        .for('update');
+
+      if (existing) {
+        if (existing.status === 'pending' || existing.status === 'accepted') {
+          throw new AppError(409, 'Already applied', 'already_applied');
+        }
+        if (existing.status === 'rejected') {
+          throw new AppError(409, 'Already applied', 'already_applied');
+        }
+        // Cleared by poster — allow one fresh pending application again
+        const [updated] = await tx
+          .update(applications)
+          .set({
+            status: 'pending',
+            lat: lat ?? null,
+            lng: lng ?? null,
+            updatedAt: new Date(),
+          })
+          .where(
+            and(eq(applications.id, existing.id), eq(applications.status, 'cleared')),
+          )
+          .returning();
+        if (!updated) {
+          throw new AppError(409, 'Already applied', 'already_applied');
+        }
+        return updated;
+      }
+
       try {
         const [app] = await tx
           .insert(applications)
           .values({
             driveId,
             driverId,
-            lat: input.lat != null ? String(input.lat) : undefined,
-            lng: input.lng != null ? String(input.lng) : undefined,
+            lat,
+            lng,
           })
           .returning();
         return app;
@@ -407,6 +590,38 @@ export async function applyToDrive(
         }
         throw err;
       }
+    }),
+  );
+}
+
+export async function clearApplications(posterId: string, driveId: string) {
+  return withLock(`drive:${driveId}:mutate`, async () =>
+    db.transaction(async (tx) => {
+      const [drive] = await tx
+        .select()
+        .from(drives)
+        .where(eq(drives.id, driveId))
+        .for('update');
+      if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
+      if (drive.posterId !== posterId) {
+        throw new AppError(403, 'Only the poster can clear applications', 'forbidden');
+      }
+      if (drive.status !== 'open') {
+        throw new AppError(409, 'Only open drives can clear submissions', 'drive_not_open');
+      }
+
+      const cleared = await tx
+        .update(applications)
+        .set({ status: 'cleared', updatedAt: new Date() })
+        .where(
+          and(
+            eq(applications.driveId, driveId),
+            inArray(applications.status, ['pending', 'rejected']),
+          ),
+        )
+        .returning({ id: applications.id });
+
+      return { cleared: cleared.length };
     }),
   );
 }
@@ -542,6 +757,53 @@ export async function acceptApplication(
   );
 }
 
+export async function markDrivePickedUp(
+  actorId: string,
+  driveId: string,
+): Promise<DriveDto> {
+  return withLock(`drive:${driveId}:mutate`, async () =>
+    db.transaction(async (tx) => {
+      const [drive] = await tx
+        .select()
+        .from(drives)
+        .where(eq(drives.id, driveId))
+        .for('update');
+      if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
+      if (drive.assigneeId !== actorId) {
+        throw new AppError(
+          403,
+          'Only the assigned driver can mark pickup',
+          'forbidden',
+        );
+      }
+      if (drive.status !== 'assigned') {
+        throw new AppError(
+          409,
+          'Drive must be assigned before pickup',
+          'invalid_status',
+        );
+      }
+
+      const [updated] = await tx
+        .update(drives)
+        .set({
+          status: 'picked_up',
+          updatedAt: new Date(),
+        })
+        .where(and(eq(drives.id, driveId), eq(drives.status, 'assigned')))
+        .returning();
+      if (!updated) {
+        throw new AppError(
+          409,
+          'Drive must be assigned before pickup',
+          'invalid_status',
+        );
+      }
+      return mapDrive(updated, actorId);
+    }),
+  );
+}
+
 export async function unassignDrive(
   posterId: string,
   driveId: string,
@@ -604,7 +866,7 @@ export async function completeDrive(
     input.costCents < 0 ||
     input.costCents > 1_000_000_00
   ) {
-    throw new AppError(400, 'Enter a valid cost', 'invalid_cost');
+    throw new AppError(400, 'Enter a valid profit', 'invalid_cost');
   }
 
   return withLock(`drive:${driveId}:mutate`, async () =>
@@ -615,8 +877,12 @@ export async function completeDrive(
         .where(eq(drives.id, driveId))
         .for('update');
       if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
-      if (drive.status !== 'assigned') {
-        throw new AppError(409, 'Drive must be assigned to complete', 'invalid_status');
+      if (drive.status !== 'picked_up') {
+        throw new AppError(
+          409,
+          'Mark pickup before completing',
+          'invalid_status',
+        );
       }
       if (drive.posterId !== actorId && drive.assigneeId !== actorId) {
         throw new AppError(403, 'Not allowed to complete this drive', 'forbidden');
@@ -639,10 +905,14 @@ export async function completeDrive(
           completedAt: new Date(),
           updatedAt: new Date(),
         })
-        .where(and(eq(drives.id, driveId), eq(drives.status, 'assigned')))
+        .where(and(eq(drives.id, driveId), eq(drives.status, 'picked_up')))
         .returning();
       if (!updated) {
-        throw new AppError(409, 'Drive must be assigned to complete', 'invalid_status');
+        throw new AppError(
+          409,
+          'Mark pickup before completing',
+          'invalid_status',
+        );
       }
 
       try {

@@ -1,7 +1,12 @@
 import type { VehicleClass } from '../auth/types';
 import { apiFetch } from './client';
 
-export type DriveStatus = 'open' | 'assigned' | 'completed' | 'cancelled';
+export type DriveStatus =
+  | 'open'
+  | 'assigned'
+  | 'picked_up'
+  | 'completed'
+  | 'cancelled';
 
 export type TripType = 'one_way' | 'round_trip';
 
@@ -20,6 +25,8 @@ export type PublicProfile = {
     extraInfo?: string;
   };
 };
+
+export type ApplicationStatus = 'pending' | 'accepted' | 'rejected' | 'cleared';
 
 export type Drive = {
   id: string;
@@ -43,6 +50,7 @@ export type Drive = {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  viewerApplicationStatus?: ApplicationStatus;
 };
 
 export type CreateDriveInput = {
@@ -58,6 +66,9 @@ export type CreateDriveInput = {
 export type DriveListItem = Drive & {
   poster: PublicProfile;
   assignee?: PublicProfile;
+  /** Accepted driver location from apply (for posted/active map). */
+  assigneeLat?: number;
+  assigneeLng?: number;
 };
 
 /** Home board sections → list query. */
@@ -136,7 +147,7 @@ export async function updateDrive(
 
 export type DriveApplication = {
   id: string;
-  status: 'pending' | 'accepted' | 'rejected';
+  status: ApplicationStatus;
   lat?: number;
   lng?: number;
   createdAt: string;
@@ -152,6 +163,15 @@ export async function listApplications(
   return data.items ?? [];
 }
 
+export async function clearApplications(
+  driveId: string,
+): Promise<{ cleared: number }> {
+  return apiFetch<{ cleared: number }>(
+    `/v1/drives/${driveId}/applications/clear`,
+    { method: 'POST', body: JSON.stringify({}) },
+  );
+}
+
 export async function acceptApplication(
   driveId: string,
   applicationId: string,
@@ -160,6 +180,14 @@ export async function acceptApplication(
     method: 'POST',
     body: JSON.stringify({ applicationId }),
   });
+  return data.drive;
+}
+
+export async function markDrivePickedUp(driveId: string): Promise<Drive> {
+  const data = await apiFetch<{ drive: Drive }>(
+    `/v1/drives/${driveId}/picked-up`,
+    { method: 'POST', body: JSON.stringify({}) },
+  );
   return data.drive;
 }
 

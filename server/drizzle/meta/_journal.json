@@ -22,6 +22,27 @@
       "when": 1783991000000,
       "tag": "0002_one_accepted_per_drive",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1784300000000,
+      "tag": "0003_application_cleared",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1784301000000,
+      "tag": "0004_picked_up_status",
+      "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1784310000000,
+      "tag": "0005_admin_analytics",
+      "breakpoints": true
     }
   ]
 }

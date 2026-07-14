@@ -19,6 +19,8 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import {
   applyToDrive,
   listDrives,
+  markDrivePickedUp,
+  type Drive,
   type DriveBoard,
   type DriveListItem,
 } from '../api/drives';
@@ -26,8 +28,11 @@ import { mapApiError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
 import { bottomNavClearance } from '../components/navigation/BottomNav';
 import { Button } from '../components/ui/Button';
+import { CompleteDriveModal } from '../components/ui/CompleteDriveModal';
 import { DriveCard } from '../components/ui/DriveCard';
+import { getCachedCoordinate } from '../components/ui/getCachedCoordinate';
 import { LoadingHint } from '../components/ui/LoadingHint';
+import { driverMatchesOpenDrive } from '../drives/matchDrive';
 import { GlassSurface, colors, fonts, radius, space, type } from '../theme';
 
 const BOARDS: {
@@ -35,7 +40,11 @@ const BOARDS: {
   label: string;
   empty: string;
 }[] = [
-  { key: 'open', label: 'Open', empty: 'No open drives right now.' },
+  {
+    key: 'open',
+    label: 'Open',
+    empty: 'No open drives match your vehicle right now.',
+  },
   { key: 'active', label: 'Active', empty: 'No active jobs yet.' },
   { key: 'history', label: 'History', empty: 'No completed jobs yet.' },
 ];
@@ -86,7 +95,7 @@ function splitActiveSections(
 type HomeScreenProps = {
   /** Bump to refetch boards after an external mutation. */
   refreshToken?: number;
-  /** Open board — manage a drive you posted. */
+  /** Manage a drive you posted (open applicants, or active/history status). */
   onManageDrive?: (drive: DriveListItem) => void;
 };
 
@@ -110,6 +119,11 @@ export function HomeScreen({
   const [applyingId, setApplyingId] = useState<string | null>(null);
   const [appliedIds, setAppliedIds] = useState<Set<string>>(() => new Set());
   const [applyError, setApplyError] = useState<string | null>(null);
+  const [completingDrive, setCompletingDrive] = useState<DriveListItem | null>(
+    null,
+  );
+  const [pickingUpId, setPickingUpId] = useState<string | null>(null);
+  const [pickupError, setPickupError] = useState<string | null>(null);
 
   const loadBoard = useCallback(
     async (board: DriveBoard, mode: 'initial' | 'refresh' = 'initial') => {
@@ -124,16 +138,44 @@ export function HomeScreen({
       }));
       try {
         const result = await listDrives(board, { limit: 50 });
+        const capacity = user?.onboarding
+          ? {
+              vehicleClass: user.onboarding.vehicleClass,
+              seats: user.onboarding.seats,
+            }
+          : null;
+        const items =
+          board === 'open'
+            ? result.items.filter(
+                (d) =>
+                  d.status === 'open' &&
+                  driverMatchesOpenDrive(capacity, d, user?.id),
+              )
+            : result.items;
         setBoards((prev) => ({
           ...prev,
           [board]: {
-            items: result.items,
+            items,
             loading: false,
             refreshing: false,
             error: null,
             loaded: true,
           },
         }));
+        if (board === 'open') {
+          setAppliedIds((prev) => {
+            const next = new Set(prev);
+            for (const item of items) {
+              const status = item.viewerApplicationStatus;
+              if (status === 'pending' || status === 'accepted') {
+                next.add(item.id);
+              } else if (status === 'cleared' || status == null) {
+                next.delete(item.id);
+              }
+            }
+            return next;
+          });
+        }
       } catch (err) {
         setBoards((prev) => ({
           ...prev,
@@ -147,7 +189,7 @@ export function HomeScreen({
         }));
       }
     },
-    [],
+    [user?.id, user?.onboarding],
   );
 
   useEffect(() => {
@@ -234,7 +276,8 @@ export function HomeScreen({
     setApplyError(null);
     setApplyingId(driveId);
     try {
-      await applyToDrive(driveId);
+      const coords = await getCachedCoordinate();
+      await applyToDrive(driveId, coords ?? undefined);
       setAppliedIds((prev) => new Set(prev).add(driveId));
     } catch (err) {
       const mapped = mapApiError(err);
@@ -248,6 +291,69 @@ export function HomeScreen({
     }
   };
 
+  const onPickedUp = async (driveId: string) => {
+    setPickupError(null);
+    setPickingUpId(driveId);
+    try {
+      const updated = await markDrivePickedUp(driveId);
+      setBoards((prev) => ({
+        ...prev,
+        active: {
+          ...prev.active,
+          items: prev.active.items.map((d) =>
+            d.id === driveId ? { ...d, ...updated, status: 'picked_up' } : d,
+          ),
+        },
+      }));
+    } catch (err) {
+      setPickupError(mapApiError(err).message);
+    } finally {
+      setPickingUpId(null);
+    }
+  };
+
+  const onDriveCompleted = (driveId: string, updated: Drive) => {
+    setCompletingDrive(null);
+    setBoards((prev) => {
+      const fromActive = prev.active.items.find((d) => d.id === driveId);
+      if (!fromActive) {
+        return {
+          ...prev,
+          active: {
+            ...prev.active,
+            items: prev.active.items.filter((d) => d.id !== driveId),
+          },
+        };
+      }
+      const historyItem: DriveListItem = {
+        ...fromActive,
+        ...updated,
+        status: 'completed',
+        poster: fromActive.poster,
+        assignee: fromActive.assignee,
+        assigneeLat: fromActive.assigneeLat,
+        assigneeLng: fromActive.assigneeLng,
+      };
+      return {
+        ...prev,
+        active: {
+          ...prev.active,
+          items: prev.active.items.filter((d) => d.id !== driveId),
+        },
+        history: {
+          ...prev.history,
+          items: [
+            historyItem,
+            ...prev.history.items.filter((d) => d.id !== driveId),
+          ],
+          loaded: true,
+        },
+      };
+    });
+    goTo(2);
+    void loadBoard('history', 'refresh');
+  };
+
   const padBottom = bottomNavClearance(insets.bottom) + space.lg;
 
   const activeSections = useMemo(
@@ -255,20 +361,47 @@ export function HomeScreen({
     [boards.active.items, user?.id],
   );
 
-  const renderDriveCard = (item: DriveListItem, board: DriveBoard) => (
-    <DriveCard
-      drive={item}
-      viewerId={user?.id}
-      onApply={
-        board === 'open' ? () => void onApply(item.id) : undefined
-      }
-      onManage={
-        board === 'open' ? () => onManageDrive?.(item) : undefined
-      }
-      applying={applyingId === item.id}
-      applied={appliedIds.has(item.id)}
-    />
-  );
+  const renderDriveCard = (
+    item: DriveListItem,
+    board: DriveBoard,
+    opts?: { showMap?: boolean },
+  ) => {
+    const status = item.viewerApplicationStatus;
+    const applied =
+      appliedIds.has(item.id) ||
+      status === 'pending' ||
+      status === 'accepted';
+    const applyAgain = !applied && status === 'cleared';
+    const canApply =
+      board === 'open' && status !== 'rejected';
+    return (
+      <DriveCard
+        drive={item}
+        viewerId={user?.id}
+        onApply={canApply ? () => void onApply(item.id) : undefined}
+        onManage={
+          onManageDrive != null &&
+          (board === 'open' ||
+            ((board === 'active' || board === 'history') &&
+              user?.id != null &&
+              item.posterId === user.id))
+            ? () => onManageDrive(item)
+            : undefined
+        }
+        onPickedUp={
+          board === 'active' ? () => void onPickedUp(item.id) : undefined
+        }
+        onComplete={
+          board === 'active' ? () => setCompletingDrive(item) : undefined
+        }
+        applying={applyingId === item.id}
+        applied={applied}
+        pickingUp={pickingUpId === item.id}
+        applyAgain={applyAgain}
+        showMap={opts?.showMap}
+      />
+    );
+  };
 
   const listEmpty = (board: (typeof BOARDS)[number], state: BoardState) => (
     <View style={styles.empty}>
@@ -391,6 +524,13 @@ export function HomeScreen({
                   showsVerticalScrollIndicator={false}
                   refreshControl={refresh}
                   ListEmptyComponent={listEmpty(b, state)}
+                  ListHeaderComponent={
+                    pickupError ? (
+                      <Text style={styles.applyError} accessibilityRole="alert">
+                        {pickupError}
+                      </Text>
+                    ) : null
+                  }
                   renderSectionHeader={({ section }) => (
                     <View
                       style={[
@@ -409,7 +549,11 @@ export function HomeScreen({
                       ) : null}
                     </View>
                   )}
-                  renderItem={({ item }) => renderDriveCard(item, 'active')}
+                  renderItem={({ item, section }) =>
+                    renderDriveCard(item, 'active', {
+                      showMap: section.key === 'dispatched',
+                    })
+                  }
                   ItemSeparatorComponent={() => <View style={styles.sep} />}
                 />
               ) : (
@@ -439,6 +583,13 @@ export function HomeScreen({
           );
         })}
       </Animated.ScrollView>
+
+      <CompleteDriveModal
+        visible={completingDrive != null}
+        drive={completingDrive}
+        onClose={() => setCompletingDrive(null)}
+        onCompleted={onDriveCompleted}
+      />
     </View>
   );
 }

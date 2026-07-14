@@ -108,3 +108,57 @@ export async function verifyRefreshToken(token: string): Promise<{
     return null;
   }
 }
+
+const adminSecret = () =>
+  new TextEncoder().encode(env.adminJwtSecret);
+
+export type AdminAccessClaims = {
+  sub: string;
+  sid: string;
+  role: 'admin';
+};
+
+export async function signAdminToken(claims: {
+  sessionId: string;
+}): Promise<string> {
+  return new SignJWT({ role: 'admin', sid: claims.sessionId })
+    .setProtectedHeader({ alg: 'HS256' })
+    .setSubject(claims.sessionId)
+    .setIssuedAt()
+    .setExpirationTime(`${env.ADMIN_SESSION_TTL_SEC}s`)
+    .sign(adminSecret());
+}
+
+export async function verifyAdminToken(
+  token: string,
+): Promise<AdminAccessClaims | null> {
+  try {
+    const { payload } = await jwtVerify(token, adminSecret(), {
+      algorithms: ['HS256'],
+      clockTolerance: 30,
+    });
+    if (typeof payload.sub !== 'string') return null;
+    if (typeof payload.sid !== 'string') return null;
+    if (payload.role !== 'admin') return null;
+    return { sub: payload.sub, sid: payload.sid, role: 'admin' };
+  } catch {
+    return null;
+  }
+}
+
+/** Timing-safe compare of password against ADMIN_PASSWORD env. */
+export function verifyAdminPassword(password: string): boolean {
+  const expected = env.ADMIN_PASSWORD;
+  if (!expected) return false;
+  return safeEqual(password, expected);
+}
+
+export function randomShortCode(length = 6): string {
+  const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  const bytes = randomBytes(length);
+  let out = '';
+  for (let i = 0; i < length; i++) {
+    out += alphabet[bytes[i]! % alphabet.length];
+  }
+  return out;
+}

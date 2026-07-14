@@ -16,6 +16,7 @@ import { X } from 'lucide-react-native';
 
 import {
   acceptApplication,
+  clearApplications,
   listApplications,
   updateDrive,
   type DriveApplication,
@@ -40,7 +41,7 @@ import { NumberStepper } from '../components/ui/NumberStepper';
 import { TextField } from '../components/ui/TextField';
 import { MistBackdrop, colors, fonts, radius, space, type } from '../theme';
 
-type ManageTab = 'applicants' | 'details';
+type ManageTab = 'applicants' | 'status' | 'details';
 
 type ManageDriveSheetProps = {
   visible: boolean;
@@ -56,11 +57,6 @@ const TRIP_OPTIONS: { value: TripChoice; label: string }[] = [
   { value: 'round_trip', label: 'Round trip' },
 ];
 
-const TABS: { key: ManageTab; label: string }[] = [
-  { key: 'applicants', label: 'Applicants' },
-  { key: 'details', label: 'Details' },
-];
-
 function applicantDetail(app: DriveApplication): string | undefined {
   const years = app.driver.onboarding?.yearsDrivingUpstate;
   const seats = app.driver.onboarding?.seats;
@@ -71,8 +67,27 @@ function applicantDetail(app: DriveApplication): string | undefined {
   return parts.length ? parts.join(' · ') : undefined;
 }
 
+function driveStatusLabel(status: DriveListItem['status']): string {
+  switch (status) {
+    case 'open':
+      return 'Open';
+    case 'assigned':
+      return 'Accepted';
+    case 'picked_up':
+      return 'Picked up';
+    case 'completed':
+      return 'Completed';
+    case 'cancelled':
+      return 'Cancelled';
+  }
+}
+
+function formatMoney(cents: number): string {
+  return `$${(cents / 100).toFixed(cents % 100 === 0 ? 0 : 2)}`;
+}
+
 /**
- * Poster manage sheet — applicants + accept, or edit open-drive details.
+ * Poster manage sheet — applicants / status + details.
  */
 export function ManageDriveSheet({
   visible,
@@ -86,10 +101,12 @@ export function ManageDriveSheet({
   const [active, setActive] = useState<DriveListItem | null>(null);
 
   const [tab, setTab] = useState<ManageTab>('applicants');
+  /** Uncleared applications (pending / rejected / accepted). */
   const [apps, setApps] = useState<DriveApplication[]>([]);
   const [appsLoading, setAppsLoading] = useState(false);
   const [appsError, setAppsError] = useState<string | null>(null);
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
+  const [clearing, setClearing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const [title, setTitle] = useState('');
@@ -121,7 +138,7 @@ export function ManageDriveSheet({
     setAppsError(null);
     try {
       const items = await listApplications(driveId);
-      setApps(items.filter((a) => a.status === 'pending'));
+      setApps(items.filter((a) => a.status !== 'cleared'));
     } catch (err) {
       setAppsError(mapApiError(err).message);
     } finally {
@@ -133,7 +150,7 @@ export function ManageDriveSheet({
     if (visible && drive) {
       setActive(drive);
       setMounted(true);
-      setTab('applicants');
+      setTab(drive.status === 'open' ? 'applicants' : 'status');
       setActionError(null);
       fillDetails(drive);
       void loadApps(drive.id);
@@ -145,12 +162,23 @@ export function ManageDriveSheet({
       setActive(null);
       setApps([]);
       setAcceptingId(null);
+      setClearing(false);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- visibility-driven
   }, [visible, drive?.id]);
 
+  // Keep snapshot status in sync when parent refreshes the same drive.
+  useEffect(() => {
+    if (visible && drive) {
+      setActive(drive);
+      if (drive.status !== 'open' && tab === 'applicants') {
+        setTab('status');
+      }
+    }
+  }, [visible, drive, tab]);
+
   const requestClose = () => {
-    if (saving || acceptingId) return;
+    if (saving || acceptingId || clearing) return;
     Keyboard.dismiss();
     onClose();
   };
@@ -169,6 +197,26 @@ export function ManageDriveSheet({
       void loadApps(target.id);
     } finally {
       setAcceptingId(null);
+    }
+  };
+
+  const onClearSubmissions = async () => {
+    const target = drive ?? active;
+    const clearable = apps.filter(
+      (a) => a.status === 'pending' || a.status === 'rejected',
+    );
+    if (!target || clearable.length === 0) return;
+    setActionError(null);
+    setClearing(true);
+    try {
+      await clearApplications(target.id);
+      setApps([]);
+      onChanged();
+    } catch (err) {
+      setActionError(mapApiError(err).message);
+      void loadApps(target.id);
+    } finally {
+      setClearing(false);
     }
   };
 
@@ -219,10 +267,43 @@ export function ManageDriveSheet({
   const tripError =
     submitted && !tripType ? 'Pick one way or round trip' : undefined;
 
-  const busy = saving || acceptingId != null;
+  const busy = saving || acceptingId != null || clearing;
   const sheetDrive = drive ?? active;
 
   if (!sheetDrive || (!visible && !mounted)) return null;
+
+  const isOpen = sheetDrive.status === 'open';
+  const pendingApps = apps.filter((a) => a.status === 'pending');
+  const openSubmissions = apps.filter(
+    (a) => a.status === 'pending' || a.status === 'rejected',
+  );
+  const detailsLocked =
+    !isOpen || openSubmissions.length > 0;
+  const tabs: { key: ManageTab; label: string }[] = isOpen
+    ? [
+        { key: 'applicants', label: 'Applicants' },
+        { key: 'details', label: 'Details' },
+      ]
+    : [
+        { key: 'status', label: 'Status' },
+        { key: 'details', label: 'Details' },
+      ];
+
+  const acceptedApp = apps.find((a) => a.status === 'accepted');
+  const statusDriver = sheetDrive.assignee ?? acceptedApp?.driver;
+  const statusCoord =
+    sheetDrive.assigneeLat != null && sheetDrive.assigneeLng != null
+      ? {
+          latitude: sheetDrive.assigneeLat,
+          longitude: sheetDrive.assigneeLng,
+        }
+      : acceptedApp?.lat != null && acceptedApp?.lng != null
+        ? { latitude: acceptedApp.lat, longitude: acceptedApp.lng }
+        : null;
+  const profitCents =
+    sheetDrive.status === 'completed' && sheetDrive.costCents != null
+      ? Math.round(sheetDrive.costCents * 0.1)
+      : null;
 
   return (
     <Modal
@@ -277,7 +358,7 @@ export function ManageDriveSheet({
                 </Text>
 
                 <View style={styles.tabs} accessibilityRole="tablist">
-                  {TABS.map((t) => {
+                  {tabs.map((t) => {
                     const selected = tab === t.key;
                     return (
                       <Pressable
@@ -305,7 +386,7 @@ export function ManageDriveSheet({
                 </View>
               </Pressable>
 
-              {tab === 'applicants' ? (
+              {tab === 'applicants' && isOpen ? (
                 <View style={styles.section}>
                   {appsLoading ? (
                     <View style={styles.centered}>
@@ -323,17 +404,33 @@ export function ManageDriveSheet({
                         Try again
                       </Button>
                     </View>
-                  ) : apps.length === 0 ? (
+                  ) : pendingApps.length === 0 ? (
                     <View style={styles.emptyBlock}>
                       <Text style={styles.emptyTitle}>No applicants yet</Text>
                       <Text style={styles.emptyBody}>
                         When drivers apply, they’ll show up here so you can pick
                         one.
                       </Text>
+                      {openSubmissions.length > 0 ? (
+                        <View style={styles.clearBlock}>
+                          <Button
+                            variant="ghost"
+                            loading={clearing}
+                            disabled={busy}
+                            onPress={() => void onClearSubmissions()}
+                          >
+                            Clear submissions
+                          </Button>
+                          <Text style={styles.clearHint}>
+                            Clear so you can edit details. Drivers must apply
+                            again.
+                          </Text>
+                        </View>
+                      ) : null}
                     </View>
                   ) : (
                     <View style={styles.appList}>
-                      {apps.map((app) => {
+                      {pendingApps.map((app) => {
                         const coord =
                           app.lat != null && app.lng != null
                             ? { latitude: app.lat, longitude: app.lng }
@@ -372,6 +469,20 @@ export function ManageDriveSheet({
                           </View>
                         );
                       })}
+                      <View style={styles.clearBlock}>
+                        <Button
+                          variant="ghost"
+                          loading={clearing}
+                          disabled={busy}
+                          onPress={() => void onClearSubmissions()}
+                        >
+                          Clear submissions
+                        </Button>
+                        <Text style={styles.clearHint}>
+                          Clears everyone so you can edit details. Applicants
+                          tap Apply again on the open board.
+                        </Text>
+                      </View>
                     </View>
                   )}
                   {actionError ? (
@@ -380,9 +491,103 @@ export function ManageDriveSheet({
                     </Text>
                   ) : null}
                 </View>
+              ) : tab === 'status' && !isOpen ? (
+                <View style={styles.section}>
+                  <View style={styles.statusCard}>
+                    <Text style={styles.statusEyebrow}>Ride status</Text>
+                    <Text style={styles.statusValue}>
+                      {driveStatusLabel(sheetDrive.status)}
+                    </Text>
+                    {sheetDrive.status === 'completed' &&
+                    sheetDrive.costCents != null ? (
+                      <Text style={styles.statusMeta}>
+                        Profit {formatMoney(sheetDrive.costCents)}
+                      </Text>
+                    ) : null}
+                  </View>
+
+                  {profitCents != null ? (
+                    <View style={styles.profitCard}>
+                      <Text style={styles.statusEyebrow}>Your cut</Text>
+                      <Text style={styles.profitValue}>
+                        {formatMoney(profitCents)}
+                      </Text>
+                      <Text style={styles.statusMeta}>
+                        10% of profit — pay/settle outside the app in Bank
+                      </Text>
+                    </View>
+                  ) : null}
+
+                  {statusDriver ? (
+                    <View style={styles.statusDriver}>
+                      <Text style={styles.statusEyebrow}>Driver</Text>
+                      <DriverCard
+                        name={statusDriver.name}
+                        vehicleType={statusDriver.onboarding?.vehicleType}
+                        phone={
+                          acceptedApp?.driver.phone
+                            ? formatPhoneDisplay(acceptedApp.driver.phone)
+                            : undefined
+                        }
+                        detail={applicantDetail(
+                          acceptedApp ?? {
+                            id: '',
+                            status: 'accepted',
+                            createdAt: '',
+                            driver: statusDriver,
+                          },
+                        )}
+                        photoUri={statusDriver.onboarding?.selfPhotoUri}
+                        vehicleInteriorUri={
+                          statusDriver.onboarding?.vehicleInteriorUri
+                        }
+                        vehicleExteriorUri={
+                          statusDriver.onboarding?.vehicleExteriorUri
+                        }
+                        coordinate={statusCoord}
+                        showMap
+                      />
+                    </View>
+                  ) : (
+                    <View style={styles.emptyBlock}>
+                      <Text style={styles.emptyTitle}>No driver assigned</Text>
+                      <Text style={styles.emptyBody}>
+                        This drive doesn’t have an assigned driver yet.
+                      </Text>
+                    </View>
+                  )}
+                </View>
               ) : (
                 <View style={styles.section}>
-                  <View style={styles.fields}>
+                  {detailsLocked ? (
+                    <View style={styles.lockBanner}>
+                      <Text style={styles.lockTitle}>
+                        {isOpen
+                          ? 'Details locked while people have applied'
+                          : 'Details can’t be edited after assign'}
+                      </Text>
+                      <Text style={styles.lockBody}>
+                        {isOpen
+                          ? 'Clear submissions first — then edit. Applicants will need to apply again.'
+                          : 'Route and passenger details stay as they were when the drive was open.'}
+                      </Text>
+                      {isOpen && openSubmissions.length > 0 ? (
+                        <Button
+                          variant="ghost"
+                          loading={clearing}
+                          disabled={busy}
+                          onPress={() => void onClearSubmissions()}
+                        >
+                          Clear submissions
+                        </Button>
+                      ) : null}
+                    </View>
+                  ) : null}
+
+                  <View
+                    style={[styles.fields, detailsLocked && styles.fieldsLocked]}
+                    pointerEvents={detailsLocked ? 'none' : 'auto'}
+                  >
                     <TextField
                       label="Title"
                       value={title}
@@ -390,7 +595,7 @@ export function ManageDriveSheet({
                       placeholder="SF to Monticello"
                       autoCapitalize="words"
                       error={titleError}
-                      editable={!busy}
+                      editable={!busy && !detailsLocked}
                       returnKeyType="next"
                     />
                     <TextField
@@ -399,7 +604,7 @@ export function ManageDriveSheet({
                       onChangeText={(v) => setPhone(formatPhoneDisplay(v))}
                       keyboardType="phone-pad"
                       error={phoneError}
-                      editable={!busy}
+                      editable={!busy && !detailsLocked}
                       textContentType="telephoneNumber"
                     />
                     <ChoiceGroup
@@ -430,7 +635,7 @@ export function ManageDriveSheet({
                       onChangeText={setAddress}
                       placeholder="Pickup or drop-off"
                       autoCapitalize="words"
-                      editable={!busy}
+                      editable={!busy && !detailsLocked}
                     />
                     <TextField
                       label="Extra info (optional)"
@@ -438,7 +643,7 @@ export function ManageDriveSheet({
                       onChangeText={setExtraInfo}
                       placeholder="Anything drivers should know"
                       multiline
-                      editable={!busy}
+                      editable={!busy && !detailsLocked}
                       style={styles.extraInput}
                     />
                   </View>
@@ -449,16 +654,23 @@ export function ManageDriveSheet({
                     </Text>
                   ) : null}
 
-                  <View style={styles.actions}>
-                    <Button
-                      loading={saving}
-                      disabled={busy}
-                      onPress={() => void onSaveDetails()}
-                    >
-                      Save changes
-                    </Button>
-                    {saving ? <LoadingHint label="Saving…" /> : null}
-                  </View>
+                  {!detailsLocked ? (
+                    <View style={styles.actions}>
+                      <Button
+                        loading={saving}
+                        disabled={busy}
+                        onPress={() => void onSaveDetails()}
+                      >
+                        Save changes
+                      </Button>
+                      {saving ? <LoadingHint label="Saving…" /> : null}
+                    </View>
+                  ) : null}
+                  {actionError && isOpen ? (
+                    <Text style={styles.formError} accessibilityRole="alert">
+                      {actionError}
+                    </Text>
+                  ) : null}
                 </View>
               )}
             </ScrollView>
@@ -586,8 +798,80 @@ const styles = StyleSheet.create({
   appRow: {
     gap: space.sm,
   },
+  clearBlock: {
+    gap: space.xs,
+    paddingTop: space.sm,
+  },
+  clearHint: {
+    ...type.caption,
+    color: colors.faint,
+    textAlign: 'center',
+  },
   fields: {
     gap: space.lg,
+  },
+  fieldsLocked: {
+    opacity: 0.55,
+  },
+  lockBanner: {
+    gap: space.sm,
+    padding: space.md,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassBorder,
+    backgroundColor: colors.accentMuted,
+  },
+  lockTitle: {
+    fontFamily: fonts.sansSemi,
+    fontSize: 15,
+    letterSpacing: -0.1,
+    color: colors.ink,
+  },
+  lockBody: {
+    ...type.caption,
+    color: colors.muted,
+  },
+  statusCard: {
+    gap: space.xs,
+    padding: space.md,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassBorder,
+    backgroundColor: colors.glass,
+  },
+  profitCard: {
+    gap: space.xs,
+    padding: space.md,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(127, 168, 148, 0.35)',
+    backgroundColor: 'rgba(127, 168, 148, 0.12)',
+  },
+  statusEyebrow: {
+    ...type.label,
+    color: colors.faint,
+    textTransform: 'uppercase',
+  },
+  statusValue: {
+    fontFamily: fonts.display,
+    fontSize: 32,
+    letterSpacing: -0.5,
+    lineHeight: 36,
+    color: colors.ink,
+  },
+  profitValue: {
+    fontFamily: fonts.display,
+    fontSize: 36,
+    letterSpacing: -0.6,
+    lineHeight: 40,
+    color: colors.success,
+  },
+  statusMeta: {
+    ...type.caption,
+    color: colors.muted,
+  },
+  statusDriver: {
+    gap: space.sm,
   },
   extraInput: {
     minHeight: 72,

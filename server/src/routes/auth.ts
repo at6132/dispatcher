@@ -1,6 +1,7 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 
+import { trackEvent } from '../lib/analytics.js';
 import { AppError, sendError } from '../lib/errors.js';
 import { logDomain, logDomainWarn, maskPhone, shortId } from '../lib/log.js';
 import { normalizePhone } from '../lib/phone.js';
@@ -9,6 +10,7 @@ import {
   requireJsonContentType,
   tokenBucketKey,
 } from '../lib/security.js';
+import { recordSecurityEvent } from '../lib/securityEvents.js';
 import * as auth from '../services/auth.js';
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
@@ -71,6 +73,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         userId: shortId(tokens.user.id),
         phone: maskPhone(tokens.user.phone),
         onboardingComplete: tokens.user.onboardingComplete,
+      });
+      trackEvent({
+        name: 'auth.signup',
+        userId: tokens.user.id,
+        requestId: request.id,
+        ip: request.ip,
       });
       return reply.status(201).send(tokens);
     } catch (err) {
@@ -140,6 +148,12 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         onboardingComplete: tokens.user.onboardingComplete,
         status: tokens.user.status,
       });
+      trackEvent({
+        name: 'auth.login',
+        userId: tokens.user.id,
+        requestId: request.id,
+        ip: request.ip,
+      });
       return reply.send(tokens);
     } catch (err) {
       if (err instanceof AppError) {
@@ -149,6 +163,13 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
           code: err.code,
         });
         if (err.code === 'invalid_credentials') {
+          recordSecurityEvent({
+            kind: 'user_login_fail',
+            severity: 'info',
+            ip: request.ip,
+            requestId: request.id,
+            detail: { phone: maskPhone(phoneKey) },
+          });
           return sendError(
             reply,
             401,

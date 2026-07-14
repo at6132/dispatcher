@@ -115,6 +115,12 @@ export function mapApiError(
           message: err.message || 'Check that field and try again.',
           code: err.code,
         };
+      case 'vehicle_mismatch':
+        return {
+          message:
+            'Your vehicle doesn’t match this drive — same class, and enough seats.',
+          code: err.code,
+        };
       case 'create_failed':
       case 'internal':
         return {
