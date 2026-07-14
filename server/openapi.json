@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "description": "Backend for the Dispatcher Expo app — auth, onboarding, drives board, balances."
   },
-  "servers": [{ "url": "https://YOUR_RAILWAY_DOMAIN" }],
+  "servers": [{ "url": "https://api-production-f4ac.up.railway.app" }],
   "components": {
     "securitySchemes": {
       "bearerAuth": {
