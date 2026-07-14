@@ -1026,15 +1026,82 @@ export async function listBalances(userId: string) {
     .where(sql`${balances.posterId} = ${userId} OR ${balances.driverId} = ${userId}`)
     .orderBy(desc(balances.createdAt))
     .limit(100);
-  return rows.map((b) => ({
-    id: b.id,
-    driveId: b.driveId,
-    posterId: b.posterId,
-    driverId: b.driverId,
-    amountCents: b.amountCents,
-    status: b.status,
-    dueSunday: b.dueSunday.toISOString(),
-    settledAt: b.settledAt?.toISOString(),
-    createdAt: b.createdAt.toISOString(),
-  }));
+
+  const partyIds = [
+    ...new Set(rows.flatMap((b) => [b.posterId, b.driverId])),
+  ];
+
+  const partyRows =
+    partyIds.length === 0
+      ? []
+      : await db
+          .select({
+            id: users.id,
+            name: users.name,
+            phone: users.phone,
+            zelle: driverProfiles.zelle,
+          })
+          .from(users)
+          .leftJoin(driverProfiles, eq(driverProfiles.userId, users.id))
+          .where(inArray(users.id, partyIds));
+
+  const parties = new Map(
+    partyRows.map((p) => [
+      p.id,
+      {
+        id: p.id,
+        name: p.name,
+        phone: p.phone,
+        ...(p.zelle ? { zelle: p.zelle } : {}),
+      },
+    ]),
+  );
+
+  // Lifetime 10% earned as poster — includes settled (does not drop after Got paid).
+  const [profitRow] = await db
+    .select({
+      totalProfitCents: sql<number>`coalesce(sum(${balances.amountCents}), 0)::int`,
+    })
+    .from(balances)
+    .where(eq(balances.posterId, userId));
+
+  return {
+    items: rows.map((b) => {
+      const poster = parties.get(b.posterId) ?? {
+        id: b.posterId,
+        name: 'Driver',
+        phone: '',
+      };
+      const driver = parties.get(b.driverId) ?? {
+        id: b.driverId,
+        name: 'Driver',
+        phone: '',
+      };
+      return {
+        id: b.id,
+        driveId: b.driveId,
+        posterId: b.posterId,
+        driverId: b.driverId,
+        amountCents: b.amountCents,
+        status: b.status,
+        dueSunday: b.dueSunday.toISOString(),
+        settledAt: b.settledAt?.toISOString(),
+        createdAt: b.createdAt.toISOString(),
+        poster: {
+          id: poster.id,
+          name: poster.name,
+          phone: poster.phone,
+          ...('zelle' in poster && poster.zelle
+            ? { zelle: poster.zelle }
+            : {}),
+        },
+        driver: {
+          id: driver.id,
+          name: driver.name,
+          phone: driver.phone,
+        },
+      };
+    }),
+    totalProfitCents: profitRow?.totalProfitCents ?? 0,
+  };
 }

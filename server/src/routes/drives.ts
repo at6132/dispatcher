@@ -546,8 +546,8 @@ export const balanceRoutes: FastifyPluginAsync = async (app) => {
         windowSec: 60,
       });
       const user = requireUser(request);
-      const items = await listBalances(user.id);
-      return reply.send({ items });
+      const { items, totalProfitCents } = await listBalances(user.id);
+      return reply.send({ items, totalProfitCents });
     } catch (err) {
       if (err instanceof AppError) {
         return sendError(reply, err.statusCode, err.message, err.code);

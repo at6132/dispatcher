@@ -13,14 +13,25 @@ import {
   listBalances,
   settleBalance,
   type Balance,
+  type BalanceParty,
 } from '../api/balances';
 import { mapApiError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
+import { formatPhoneDisplay } from '../auth/validation';
 import { bottomNavClearance } from '../components/navigation/BottomNav';
 import { Button } from '../components/ui/Button';
 import { Icon } from '../components/ui/Icon';
 import { LoadingHint } from '../components/ui/LoadingHint';
 import { GlassSurface, colors, fonts, space, type } from '../theme';
+
+type OweGroup = {
+  key: string;
+  party: BalanceParty;
+  amountCents: number;
+  tripCount: number;
+  dueSunday: string;
+  balanceIds: string[];
+};
 
 function formatUsd(cents: number) {
   return new Intl.NumberFormat('en-US', {
@@ -40,14 +51,88 @@ function formatDue(iso: string) {
   })}`;
 }
 
+function formatTrips(count: number) {
+  return count === 1 ? '1 trip' : `${count} trips`;
+}
+
+function earliestDue(a: string, b: string) {
+  return new Date(a).getTime() <= new Date(b).getTime() ? a : b;
+}
+
+function groupOpenBalances(
+  items: Balance[],
+  side: 'youOwe' | 'owedToYou',
+  userId: string | undefined,
+): OweGroup[] {
+  if (!userId) return [];
+
+  const map = new Map<string, OweGroup>();
+
+  for (const b of items) {
+    if (b.status !== 'open') continue;
+
+    if (side === 'youOwe') {
+      if (b.driverId !== userId) continue;
+      const party = b.poster ?? {
+        id: b.posterId,
+        name: 'Dispatcher',
+        phone: '',
+      };
+      const existing = map.get(party.id);
+      if (existing) {
+        existing.amountCents += b.amountCents;
+        existing.tripCount += 1;
+        existing.dueSunday = earliestDue(existing.dueSunday, b.dueSunday);
+        existing.balanceIds.push(b.id);
+      } else {
+        map.set(party.id, {
+          key: party.id,
+          party,
+          amountCents: b.amountCents,
+          tripCount: 1,
+          dueSunday: b.dueSunday,
+          balanceIds: [b.id],
+        });
+      }
+      continue;
+    }
+
+    if (b.posterId !== userId) continue;
+    const party = b.driver ?? {
+      id: b.driverId,
+      name: 'Driver',
+      phone: '',
+    };
+    const existing = map.get(party.id);
+    if (existing) {
+      existing.amountCents += b.amountCents;
+      existing.tripCount += 1;
+      existing.dueSunday = earliestDue(existing.dueSunday, b.dueSunday);
+      existing.balanceIds.push(b.id);
+    } else {
+      map.set(party.id, {
+        key: party.id,
+        party,
+        amountCents: b.amountCents,
+        tripCount: 1,
+        dueSunday: b.dueSunday,
+        balanceIds: [b.id],
+      });
+    }
+  }
+
+  return [...map.values()].sort((a, b) => b.amountCents - a.amountCents);
+}
+
 export function BankScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const [items, setItems] = useState<Balance[]>([]);
+  const [totalProfitCents, setTotalProfitCents] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [settlingId, setSettlingId] = useState<string | null>(null);
+  const [settlingKey, setSettlingKey] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
   const load = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
@@ -57,6 +142,7 @@ export function BankScreen() {
     try {
       const result = await listBalances();
       setItems(result.items);
+      setTotalProfitCents(result.totalProfitCents);
     } catch (err) {
       setError(mapApiError(err).message);
     } finally {
@@ -69,24 +155,28 @@ export function BankScreen() {
     void load('initial');
   }, [load]);
 
-  const open = items.filter((b) => b.status === 'open');
-  const owedToYouCents = open
-    .filter((b) => b.posterId === user?.id)
-    .reduce((sum, b) => sum + b.amountCents, 0);
-  const youOweCents = open
-    .filter((b) => b.driverId === user?.id)
-    .reduce((sum, b) => sum + b.amountCents, 0);
+  const youOweGroups = groupOpenBalances(items, 'youOwe', user?.id);
+  const owedToYouGroups = groupOpenBalances(items, 'owedToYou', user?.id);
 
-  const onSettle = async (balanceId: string) => {
+  const owedToYouCents = owedToYouGroups.reduce(
+    (sum, g) => sum + g.amountCents,
+    0,
+  );
+  const youOweCents = youOweGroups.reduce((sum, g) => sum + g.amountCents, 0);
+
+  const onSettleGroup = async (group: OweGroup) => {
     setActionError(null);
-    setSettlingId(balanceId);
+    setSettlingKey(group.key);
     try {
-      await settleBalance(balanceId);
+      for (const id of group.balanceIds) {
+        await settleBalance(id);
+      }
       await load('refresh');
     } catch (err) {
       setActionError(mapApiError(err).message);
+      await load('refresh');
     } finally {
-      setSettlingId(null);
+      setSettlingKey(null);
     }
   };
 
@@ -134,12 +224,20 @@ export function BankScreen() {
           <GlassSurface style={styles.balanceCard} contentStyle={styles.balanceInner}>
             <View style={styles.balanceHead}>
               <Icon icon={Landmark} size="md" color={colors.accent} />
-              <Text style={styles.balanceEyebrow}>Open balances</Text>
+              <Text style={styles.balanceEyebrow}>Bank</Text>
             </View>
+            <View style={styles.profitBlock}>
+              <Text style={styles.totalLabel}>Total profit</Text>
+              <Text style={styles.balanceAmount}>
+                {formatUsd(totalProfitCents)}
+              </Text>
+              <Text style={styles.profitHint}>Includes settled</Text>
+            </View>
+            <View style={styles.totalsDivider} />
             <View style={styles.totalsRow}>
               <View style={styles.totalCol}>
                 <Text style={styles.totalLabel}>Owed to you</Text>
-                <Text style={styles.balanceAmount}>
+                <Text style={styles.balanceAmountSecondary}>
                   {formatUsd(owedToYouCents)}
                 </Text>
               </View>
@@ -156,52 +254,88 @@ export function BankScreen() {
             <Text style={styles.actionError}>{actionError}</Text>
           ) : null}
 
-          {open.length === 0 ? (
-            <Text style={styles.empty}>No open balances.</Text>
-          ) : (
-            <View style={styles.list}>
-              {open.map((b) => {
-                const isPoster = b.posterId === user?.id;
-                const isDriver = b.driverId === user?.id;
-                return (
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>You owe</Text>
+            {youOweGroups.length === 0 ? (
+              <Text style={styles.empty}>Nothing open.</Text>
+            ) : (
+              <View style={styles.list}>
+                {youOweGroups.map((g) => (
                   <GlassSurface
-                    key={b.id}
+                    key={g.key}
                     style={styles.rowCard}
                     contentStyle={styles.rowInner}
                   >
                     <View style={styles.rowTop}>
-                      <Text style={styles.rowRole}>
-                        {isPoster
-                          ? 'Owed to you'
-                          : isDriver
-                            ? 'You owe'
-                            : 'Balance'}
-                      </Text>
+                      <View style={styles.rowIdentity}>
+                        <Text style={styles.rowName}>{g.party.name}</Text>
+                        <Text style={styles.rowMeta}>
+                          {formatTrips(g.tripCount)} · {formatDue(g.dueSunday)}
+                        </Text>
+                      </View>
                       <Text style={styles.rowAmount}>
-                        {formatUsd(b.amountCents)}
+                        {formatUsd(g.amountCents)}
                       </Text>
                     </View>
-                    <Text style={styles.rowDue}>{formatDue(b.dueSunday)}</Text>
-                    {isPoster ? (
-                      <Button
-                        variant="primary"
-                        loading={settlingId === b.id}
-                        disabled={settlingId != null}
-                        onPress={() => void onSettle(b.id)}
-                        style={styles.settleBtn}
-                      >
-                        Got paid
-                      </Button>
-                    ) : (
-                      <Text style={styles.rowHint}>
-                        Pay the poster off-app, then they mark it settled.
+                    {g.party.phone ? (
+                      <Text style={styles.rowDetail}>
+                        {formatPhoneDisplay(g.party.phone)}
                       </Text>
-                    )}
+                    ) : null}
+                    {g.party.zelle ? (
+                      <Text style={styles.rowDetail}>Zelle {g.party.zelle}</Text>
+                    ) : null}
+                    <Text style={styles.rowHint}>
+                      Pay off-app. They mark it settled.
+                    </Text>
                   </GlassSurface>
-                );
-              })}
-            </View>
-          )}
+                ))}
+              </View>
+            )}
+          </View>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Owed to you</Text>
+            {owedToYouGroups.length === 0 ? (
+              <Text style={styles.empty}>Nothing open.</Text>
+            ) : (
+              <View style={styles.list}>
+                {owedToYouGroups.map((g) => (
+                  <GlassSurface
+                    key={g.key}
+                    style={styles.rowCard}
+                    contentStyle={styles.rowInner}
+                  >
+                    <View style={styles.rowTop}>
+                      <View style={styles.rowIdentity}>
+                        <Text style={styles.rowName}>{g.party.name}</Text>
+                        <Text style={styles.rowMeta}>
+                          {formatTrips(g.tripCount)} · {formatDue(g.dueSunday)}
+                        </Text>
+                      </View>
+                      <Text style={styles.rowAmount}>
+                        {formatUsd(g.amountCents)}
+                      </Text>
+                    </View>
+                    {g.party.phone ? (
+                      <Text style={styles.rowDetail}>
+                        {formatPhoneDisplay(g.party.phone)}
+                      </Text>
+                    ) : null}
+                    <Button
+                      variant="primary"
+                      loading={settlingKey === g.key}
+                      disabled={settlingKey != null}
+                      onPress={() => void onSettleGroup(g)}
+                      style={styles.settleBtn}
+                    >
+                      Got paid
+                    </Button>
+                  </GlassSurface>
+                ))}
+              </View>
+            )}
+          </View>
         </>
       )}
     </ScrollView>
@@ -264,6 +398,18 @@ const styles = StyleSheet.create({
     color: colors.muted,
     textTransform: 'uppercase',
   },
+  profitBlock: {
+    gap: space.xs,
+  },
+  profitHint: {
+    ...type.caption,
+    color: colors.faint,
+  },
+  totalsDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.hairline,
+    marginVertical: space.xs,
+  },
   totalsRow: {
     flexDirection: 'row',
     gap: space.xl,
@@ -285,10 +431,21 @@ const styles = StyleSheet.create({
   },
   balanceAmountSecondary: {
     fontFamily: fonts.display,
-    fontSize: 36,
-    letterSpacing: -1,
-    lineHeight: 42,
+    fontSize: 28,
+    letterSpacing: -0.5,
+    lineHeight: 34,
     color: colors.muted,
+  },
+  section: {
+    gap: space.md,
+    marginBottom: space.xxl,
+  },
+  sectionLabel: {
+    ...type.label,
+    fontFamily: fonts.sansMedium,
+    color: colors.muted,
+    textTransform: 'uppercase',
+    paddingLeft: space.xs,
   },
   stateBlock: {
     gap: space.md,
@@ -323,14 +480,21 @@ const styles = StyleSheet.create({
   rowTop: {
     flexDirection: 'row',
     justifyContent: 'space-between',
-    alignItems: 'baseline',
+    alignItems: 'flex-start',
     gap: space.md,
   },
-  rowRole: {
-    ...type.label,
-    fontFamily: fonts.sansMedium,
-    color: colors.muted,
-    textTransform: 'uppercase',
+  rowIdentity: {
+    flex: 1,
+    gap: 2,
+    minWidth: 0,
+  },
+  rowName: {
+    ...type.title,
+    color: colors.ink,
+  },
+  rowMeta: {
+    ...type.caption,
+    color: colors.faint,
   },
   rowAmount: {
     fontFamily: fonts.display,
@@ -338,13 +502,13 @@ const styles = StyleSheet.create({
     letterSpacing: -0.5,
     color: colors.ink,
   },
-  rowDue: {
+  rowDetail: {
     ...type.caption,
-    color: colors.faint,
+    color: colors.muted,
   },
   rowHint: {
     ...type.caption,
-    color: colors.muted,
+    color: colors.faint,
   },
   settleBtn: {
     marginTop: space.xs,

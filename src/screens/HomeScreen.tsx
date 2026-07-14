@@ -660,15 +660,18 @@ const styles = StyleSheet.create({
     height: space.md,
   },
   sectionHeader: {
-    gap: space.xs,
-    paddingBottom: space.sm,
+    gap: space.sm,
+    paddingBottom: space.md,
   },
   sectionHeaderFollow: {
-    paddingTop: space.md,
+    paddingTop: space.xxl,
   },
   sectionTitle: {
-    ...type.label,
-    color: colors.faint,
+    fontFamily: fonts.sansSemi,
+    fontSize: 16,
+    letterSpacing: 0.6,
+    lineHeight: 22,
+    color: colors.muted,
     textTransform: 'uppercase',
     paddingLeft: space.xs,
   },
