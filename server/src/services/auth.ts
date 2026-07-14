@@ -13,6 +13,7 @@ import {
   verifyRefreshToken,
 } from '../lib/crypto.js';
 import { AppError } from '../lib/errors.js';
+import { isUniqueViolation } from '../lib/locks.js';
 import {
   isValidPhone,
   normalizePhone,
@@ -163,22 +164,20 @@ export async function signup(input: {
     );
   }
   const phone = normalizePhone(input.phone);
-  const existing = await db
-    .select({ id: users.id })
-    .from(users)
-    .where(eq(users.phone, phone))
-    .limit(1);
-  if (existing.length) {
-    throw new AppError(409, 'An account with this phone already exists.', 'phone_taken');
-  }
-
   const passwordHash = await hashPassword(input.password);
-  const [created] = await db
-    .insert(users)
-    .values({ phone, name, passwordHash })
-    .returning();
-  if (!created) throw new AppError(500, 'Could not create account', 'create_failed');
-  return issueTokens(created.id);
+  try {
+    const [created] = await db
+      .insert(users)
+      .values({ phone, name, passwordHash })
+      .returning();
+    if (!created) throw new AppError(500, 'Could not create account', 'create_failed');
+    return issueTokens(created.id);
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      throw new AppError(409, 'An account with this phone already exists.', 'phone_taken');
+    }
+    throw err;
+  }
 }
 
 export async function login(input: {
@@ -203,20 +202,23 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
   }
 
   const tokenHash = sha256(refreshToken);
+  // Atomic claim: only one concurrent refresh can revoke this row
   const [row] = await db
-    .select()
-    .from(refreshTokens)
+    .update(refreshTokens)
+    .set({ revokedAt: new Date() })
     .where(
       and(
         eq(refreshTokens.id, claims.tokenId),
         eq(refreshTokens.userId, claims.userId),
         eq(refreshTokens.tokenHash, tokenHash),
+        isNull(refreshTokens.revokedAt),
+        gt(refreshTokens.expiresAt, new Date()),
       ),
     )
-    .limit(1);
+    .returning();
 
-  if (!row || row.revokedAt || row.expiresAt.getTime() < Date.now()) {
-    // Reuse detection: revoke whole family
+  if (!row) {
+    // Reuse / race: revoke whole family
     await db
       .update(refreshTokens)
       .set({ revokedAt: new Date() })
@@ -228,11 +230,6 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
       );
     throw new AppError(401, 'Invalid refresh token', 'invalid_refresh');
   }
-
-  await db
-    .update(refreshTokens)
-    .set({ revokedAt: new Date() })
-    .where(eq(refreshTokens.id, row.id));
 
   return issueTokens(claims.userId, row.familyId);
 }

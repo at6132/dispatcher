@@ -21,6 +21,7 @@ export async function runSundayLockPass(): Promise<number> {
 
   let locked = 0;
   for (const row of pastDue) {
+    // Conditional update — never overwrite an already-locked/settled race
     const result = await db
       .update(users)
       .set({ status: 'locked', updatedAt: new Date() })

@@ -1,6 +1,6 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
-import { eq } from 'drizzle-orm';
+import { and, eq } from 'drizzle-orm';
 
 import { db } from '../db/client.js';
 import { idempotencyKeys } from '../db/schema.js';
@@ -25,41 +25,68 @@ import { toAuthUser } from '../services/auth.js';
 async function withIdempotency(
   userId: string,
   request: { headers: Record<string, unknown>; method: string; url: string },
-  reply: { status: (c: number) => { send: (b: unknown) => unknown }; header: (k: string, v: string) => void },
+  reply: {
+    status: (c: number) => { send: (b: unknown) => unknown };
+    header: (k: string, v: string) => void;
+  },
   handler: () => Promise<{ status: number; body: unknown }>,
 ) {
   const raw = request.headers['idempotency-key'];
   const key = typeof raw === 'string' ? raw.trim() : '';
   if (!key) return handler();
 
-  const existing = await db
-    .select()
-    .from(idempotencyKeys)
-    .where(eq(idempotencyKeys.key, key))
-    .limit(1);
-  const hit = existing.find((e) => e.userId === userId);
-  if (hit && hit.expiresAt.getTime() > Date.now()) {
-    reply.header('Idempotency-Replayed', 'true');
-    return {
-      status: hit.responseStatus,
-      body: JSON.parse(hit.responseBody) as unknown,
-    };
-  }
-
-  const result = await handler();
-  await db
-    .insert(idempotencyKeys)
-    .values({
+  // Claim first so concurrent requests with same key cannot double-apply
+  const placeholder = JSON.stringify({ pending: true });
+  try {
+    await db.insert(idempotencyKeys).values({
       userId,
       key,
       method: request.method,
       path: request.url,
-      responseStatus: result.status,
-      responseBody: JSON.stringify(result.body),
+      responseStatus: 0,
+      responseBody: placeholder,
       expiresAt: new Date(Date.now() + 24 * 60 * 60 * 1000),
-    })
-    .onConflictDoNothing();
-  return result;
+    });
+  } catch {
+    // Someone else claimed — wait briefly then replay stored response
+    for (let i = 0; i < 20; i++) {
+      await new Promise((r) => setTimeout(r, 50));
+      const [hit] = await db
+        .select()
+        .from(idempotencyKeys)
+        .where(and(eq(idempotencyKeys.userId, userId), eq(idempotencyKeys.key, key)))
+        .limit(1);
+      if (hit && hit.responseStatus !== 0 && hit.expiresAt.getTime() > Date.now()) {
+        reply.header('Idempotency-Replayed', 'true');
+        return {
+          status: hit.responseStatus,
+          body: JSON.parse(hit.responseBody) as unknown,
+        };
+      }
+    }
+    throw new AppError(
+      409,
+      'Duplicate request in progress. Retry with the same Idempotency-Key.',
+      'idempotency_in_progress',
+    );
+  }
+
+  try {
+    const result = await handler();
+    await db
+      .update(idempotencyKeys)
+      .set({
+        responseStatus: result.status,
+        responseBody: JSON.stringify(result.body),
+      })
+      .where(and(eq(idempotencyKeys.userId, userId), eq(idempotencyKeys.key, key)));
+    return result;
+  } catch (err) {
+    await db
+      .delete(idempotencyKeys)
+      .where(and(eq(idempotencyKeys.userId, userId), eq(idempotencyKeys.key, key)));
+    throw err;
+  }
 }
 
 export const driveRoutes: FastifyPluginAsync = async (app) => {

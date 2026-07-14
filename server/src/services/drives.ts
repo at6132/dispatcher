@@ -9,6 +9,7 @@ import {
   users,
 } from '../db/schema.js';
 import { AppError } from '../lib/errors.js';
+import { isUniqueViolation, withLock } from '../lib/locks.js';
 import { isValidPhone, nextSundayDeadlineNy, normalizePhone } from '../lib/phone.js';
 import { getRedis } from '../lib/redis.js';
 import { toAuthUser } from './auth.js';
@@ -183,29 +184,40 @@ export async function applyToDrive(
     throw new AppError(403, 'Complete onboarding first', 'onboarding_required');
   }
 
-  const [drive] = await db.select().from(drives).where(eq(drives.id, driveId)).limit(1);
-  if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
-  if (drive.status !== 'open') {
-    throw new AppError(409, 'Drive is not open', 'drive_not_open');
-  }
-  if (drive.posterId === driverId) {
-    throw new AppError(400, 'Cannot apply to your own drive', 'cannot_self_apply');
-  }
+  return withLock(`drive:${driveId}:apply`, async () =>
+    db.transaction(async (tx) => {
+      const [drive] = await tx
+        .select()
+        .from(drives)
+        .where(eq(drives.id, driveId))
+        .for('update');
+      if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
+      if (drive.status !== 'open') {
+        throw new AppError(409, 'Drive is not open', 'drive_not_open');
+      }
+      if (drive.posterId === driverId) {
+        throw new AppError(400, 'Cannot apply to your own drive', 'cannot_self_apply');
+      }
 
-  try {
-    const [app] = await db
-      .insert(applications)
-      .values({
-        driveId,
-        driverId,
-        lat: input.lat != null ? String(input.lat) : undefined,
-        lng: input.lng != null ? String(input.lng) : undefined,
-      })
-      .returning();
-    return app;
-  } catch {
-    throw new AppError(409, 'Already applied', 'already_applied');
-  }
+      try {
+        const [app] = await tx
+          .insert(applications)
+          .values({
+            driveId,
+            driverId,
+            lat: input.lat != null ? String(input.lat) : undefined,
+            lng: input.lng != null ? String(input.lng) : undefined,
+          })
+          .returning();
+        return app;
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          throw new AppError(409, 'Already applied', 'already_applied');
+        }
+        throw err;
+      }
+    }),
+  );
 }
 
 export async function listApplications(posterId: string, driveId: string) {
@@ -244,101 +256,119 @@ export async function acceptApplication(
   driveId: string,
   applicationId: string,
 ): Promise<DriveDto> {
-  return db.transaction(async (tx) => {
-    const [drive] = await tx
-      .select()
-      .from(drives)
-      .where(eq(drives.id, driveId))
-      .for('update');
-    if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
-    if (drive.posterId !== posterId) {
-      throw new AppError(403, 'Only the poster can accept', 'forbidden');
-    }
-    if (drive.status !== 'open') {
-      throw new AppError(409, 'Drive is not open', 'drive_not_open');
-    }
+  return withLock(`drive:${driveId}:mutate`, async () =>
+    db.transaction(async (tx) => {
+      // Lock drive first (consistent order → no deadlocks with unassign/complete)
+      const [drive] = await tx
+        .select()
+        .from(drives)
+        .where(eq(drives.id, driveId))
+        .for('update');
+      if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
+      if (drive.posterId !== posterId) {
+        throw new AppError(403, 'Only the poster can accept', 'forbidden');
+      }
+      if (drive.status !== 'open') {
+        throw new AppError(409, 'Drive is not open', 'drive_not_open');
+      }
 
-    const [app] = await tx
-      .select()
-      .from(applications)
-      .where(
-        and(eq(applications.id, applicationId), eq(applications.driveId, driveId)),
-      )
-      .for('update');
-    if (!app || app.status !== 'pending') {
-      throw new AppError(404, 'Application not found', 'application_not_found');
-    }
+      const [app] = await tx
+        .select()
+        .from(applications)
+        .where(
+          and(eq(applications.id, applicationId), eq(applications.driveId, driveId)),
+        )
+        .for('update');
+      if (!app || app.status !== 'pending') {
+        throw new AppError(404, 'Application not found', 'application_not_found');
+      }
 
-    await tx
-      .update(applications)
-      .set({ status: 'accepted', updatedAt: new Date() })
-      .where(eq(applications.id, app.id));
-    await tx
-      .update(applications)
-      .set({ status: 'rejected', updatedAt: new Date() })
-      .where(
-        and(
-          eq(applications.driveId, driveId),
-          ne(applications.id, app.id),
-          eq(applications.status, 'pending'),
-        ),
-      );
-    const [updated] = await tx
-      .update(drives)
-      .set({
-        status: 'assigned',
-        assigneeId: app.driverId,
-        updatedAt: new Date(),
-      })
-      .where(eq(drives.id, driveId))
-      .returning();
-    if (!updated) throw new AppError(500, 'Accept failed', 'accept_failed');
-    await getRedis().del('board:open');
-    return mapDrive(updated, posterId);
-  });
+      const [claimed] = await tx
+        .update(applications)
+        .set({ status: 'accepted', updatedAt: new Date() })
+        .where(
+          and(eq(applications.id, app.id), eq(applications.status, 'pending')),
+        )
+        .returning();
+      if (!claimed) {
+        throw new AppError(409, 'Application already handled', 'application_conflict');
+      }
+
+      await tx
+        .update(applications)
+        .set({ status: 'rejected', updatedAt: new Date() })
+        .where(
+          and(
+            eq(applications.driveId, driveId),
+            ne(applications.id, app.id),
+            eq(applications.status, 'pending'),
+          ),
+        );
+
+      // Conditional status transition — second accept loses
+      const [updated] = await tx
+        .update(drives)
+        .set({
+          status: 'assigned',
+          assigneeId: app.driverId,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(drives.id, driveId), eq(drives.status, 'open')))
+        .returning();
+      if (!updated) {
+        throw new AppError(409, 'Drive is not open', 'drive_not_open');
+      }
+      await getRedis().del('board:open');
+      return mapDrive(updated, posterId);
+    }),
+  );
 }
 
 export async function unassignDrive(
   posterId: string,
   driveId: string,
 ): Promise<DriveDto> {
-  return db.transaction(async (tx) => {
-    const [drive] = await tx
-      .select()
-      .from(drives)
-      .where(eq(drives.id, driveId))
-      .for('update');
-    if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
-    if (drive.posterId !== posterId) {
-      throw new AppError(403, 'Only the poster can unassign', 'forbidden');
-    }
-    if (drive.status !== 'assigned') {
-      throw new AppError(409, 'Drive is not assigned', 'drive_not_assigned');
-    }
+  return withLock(`drive:${driveId}:mutate`, async () =>
+    db.transaction(async (tx) => {
+      const [drive] = await tx
+        .select()
+        .from(drives)
+        .where(eq(drives.id, driveId))
+        .for('update');
+      if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
+      if (drive.posterId !== posterId) {
+        throw new AppError(403, 'Only the poster can unassign', 'forbidden');
+      }
+      if (drive.status !== 'assigned') {
+        throw new AppError(409, 'Drive is not assigned', 'drive_not_assigned');
+      }
 
-    await tx
-      .update(applications)
-      .set({ status: 'pending', updatedAt: new Date() })
-      .where(
-        and(
-          eq(applications.driveId, driveId),
-          eq(applications.status, 'accepted'),
-        ),
-      );
+      await tx
+        .update(applications)
+        .set({ status: 'pending', updatedAt: new Date() })
+        .where(
+          and(
+            eq(applications.driveId, driveId),
+            eq(applications.status, 'accepted'),
+          ),
+        );
 
-    const [updated] = await tx
-      .update(drives)
-      .set({
-        status: 'open',
-        assigneeId: null,
-        updatedAt: new Date(),
-      })
-      .where(eq(drives.id, driveId))
-      .returning();
-    if (!updated) throw new AppError(500, 'Unassign failed', 'unassign_failed');
-    await getRedis().del('board:open');
-    return mapDrive(updated, posterId);
-  });
+      const [updated] = await tx
+        .update(drives)
+        .set({
+          status: 'open',
+          assigneeId: null,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(drives.id, driveId), eq(drives.status, 'assigned')))
+        .returning();
+      if (!updated) {
+        throw new AppError(409, 'Drive is not assigned', 'drive_not_assigned');
+      }
+      await getRedis().del('board:open');
+      return mapDrive(updated, posterId);
+    }),
+  );
 }
 
 export async function completeDrive(
@@ -359,58 +389,82 @@ export async function completeDrive(
     throw new AppError(400, 'Enter a valid cost', 'invalid_cost');
   }
 
-  return db.transaction(async (tx) => {
-    const [drive] = await tx
-      .select()
-      .from(drives)
-      .where(eq(drives.id, driveId))
-      .for('update');
-    if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
-    if (drive.status !== 'assigned') {
-      throw new AppError(409, 'Drive must be assigned to complete', 'invalid_status');
-    }
-    if (drive.posterId !== actorId && drive.assigneeId !== actorId) {
-      throw new AppError(403, 'Not allowed to complete this drive', 'forbidden');
-    }
-    if (!drive.assigneeId) {
-      throw new AppError(409, 'No assignee', 'no_assignee');
-    }
+  return withLock(`drive:${driveId}:mutate`, async () =>
+    db.transaction(async (tx) => {
+      const [drive] = await tx
+        .select()
+        .from(drives)
+        .where(eq(drives.id, driveId))
+        .for('update');
+      if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
+      if (drive.status !== 'assigned') {
+        throw new AppError(409, 'Drive must be assigned to complete', 'invalid_status');
+      }
+      if (drive.posterId !== actorId && drive.assigneeId !== actorId) {
+        throw new AppError(403, 'Not allowed to complete this drive', 'forbidden');
+      }
+      if (!drive.assigneeId) {
+        throw new AppError(409, 'No assignee', 'no_assignee');
+      }
 
-    const amountCents = Math.round(input.costCents * 0.1);
-    const dueSunday = nextSundayDeadlineNy();
+      const amountCents = Math.round(input.costCents * 0.1);
+      const dueSunday = nextSundayDeadlineNy();
 
-    const [updated] = await tx
-      .update(drives)
-      .set({
-        status: 'completed',
-        costCents: input.costCents,
-        miles: input.miles != null ? String(input.miles) : undefined,
-        waitMinutes: input.waitMinutes,
-        completeNote: input.note?.trim() || undefined,
-        completedAt: new Date(),
-        updatedAt: new Date(),
-      })
-      .where(eq(drives.id, driveId))
-      .returning();
-    if (!updated) throw new AppError(500, 'Complete failed', 'complete_failed');
+      const [updated] = await tx
+        .update(drives)
+        .set({
+          status: 'completed',
+          costCents: input.costCents,
+          miles: input.miles != null ? String(input.miles) : undefined,
+          waitMinutes: input.waitMinutes,
+          completeNote: input.note?.trim() || undefined,
+          completedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .where(and(eq(drives.id, driveId), eq(drives.status, 'assigned')))
+        .returning();
+      if (!updated) {
+        throw new AppError(409, 'Drive must be assigned to complete', 'invalid_status');
+      }
 
-    const [balance] = await tx
-      .insert(balances)
-      .values({
-        driveId,
-        posterId: drive.posterId,
-        driverId: drive.assigneeId,
-        amountCents,
-        dueSunday,
-      })
-      .returning();
-    if (!balance) throw new AppError(500, 'Balance create failed', 'balance_failed');
-
-    return { drive: mapDrive(updated, actorId), balanceId: balance.id };
-  });
+      try {
+        const [balance] = await tx
+          .insert(balances)
+          .values({
+            driveId,
+            posterId: drive.posterId,
+            driverId: drive.assigneeId,
+            amountCents,
+            dueSunday,
+          })
+          .returning();
+        if (!balance) throw new AppError(500, 'Balance create failed', 'balance_failed');
+        return { drive: mapDrive(updated, actorId), balanceId: balance.id };
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          throw new AppError(409, 'Drive already completed', 'already_completed');
+        }
+        throw err;
+      }
+    }),
+  );
 }
 
 export async function hideDrive(posterId: string, driveId: string): Promise<DriveDto> {
+  const [updated] = await db
+    .update(drives)
+    .set({ hiddenByPoster: true, updatedAt: new Date() })
+    .where(
+      and(
+        eq(drives.id, driveId),
+        eq(drives.posterId, posterId),
+        eq(drives.status, 'completed'),
+        eq(drives.hiddenByPoster, false),
+      ),
+    )
+    .returning();
+  if (updated) return mapDrive(updated, posterId);
+
   const [drive] = await db.select().from(drives).where(eq(drives.id, driveId)).limit(1);
   if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
   if (drive.posterId !== posterId) {
@@ -419,50 +473,43 @@ export async function hideDrive(posterId: string, driveId: string): Promise<Driv
   if (drive.status !== 'completed') {
     throw new AppError(409, 'Only completed drives can be hidden', 'invalid_status');
   }
-  const [updated] = await db
-    .update(drives)
-    .set({ hiddenByPoster: true, updatedAt: new Date() })
-    .where(eq(drives.id, driveId))
-    .returning();
-  if (!updated) throw new AppError(500, 'Hide failed', 'hide_failed');
-  return mapDrive(updated, posterId);
+  // Already hidden — idempotent success
+  return mapDrive(drive, posterId);
 }
 
 export async function settleBalance(posterId: string, balanceId: string) {
-  return db.transaction(async (tx) => {
-    const [balance] = await tx
-      .select()
-      .from(balances)
-      .where(eq(balances.id, balanceId))
-      .for('update');
-    if (!balance) throw new AppError(404, 'Balance not found', 'balance_not_found');
-    if (balance.posterId !== posterId) {
-      throw new AppError(403, 'Only the poster can settle', 'forbidden');
-    }
-    if (balance.status === 'settled') {
-      return balance;
-    }
-    const [updated] = await tx
-      .update(balances)
-      .set({ status: 'settled', settledAt: new Date() })
-      .where(eq(balances.id, balanceId))
-      .returning();
-    if (!updated) throw new AppError(500, 'Settle failed', 'settle_failed');
+  return withLock(`balance:${balanceId}:settle`, async () =>
+    db.transaction(async (tx) => {
+      const [balance] = await tx
+        .select()
+        .from(balances)
+        .where(eq(balances.id, balanceId))
+        .for('update');
+      if (!balance) throw new AppError(404, 'Balance not found', 'balance_not_found');
+      if (balance.posterId !== posterId) {
+        throw new AppError(403, 'Only the poster can settle', 'forbidden');
+      }
+      if (balance.status === 'settled') {
+        return balance;
+      }
 
-    // Unlock driver if no other open past-due balances remain
-    const openCount = await tx
-      .select({ c: sql<number>`count(*)::int` })
-      .from(balances)
-      .where(
-        and(eq(balances.driverId, balance.driverId), eq(balances.status, 'open')),
-      );
-    if ((openCount[0]?.c ?? 0) === 0) {
-      await tx
-        .update(users)
-        .set({ status: 'active', updatedAt: new Date() })
-        .where(eq(users.id, balance.driverId));
-    } else {
-      // also unlock if remaining opens are not yet past due — worker handles lock
+      const [updated] = await tx
+        .update(balances)
+        .set({ status: 'settled', settledAt: new Date() })
+        .where(and(eq(balances.id, balanceId), eq(balances.status, 'open')))
+        .returning();
+      if (!updated) {
+        // Lost race — re-read settled row
+        const [again] = await tx
+          .select()
+          .from(balances)
+          .where(eq(balances.id, balanceId))
+          .limit(1);
+        if (again?.status === 'settled') return again;
+        throw new AppError(409, 'Balance could not be settled', 'settle_conflict');
+      }
+
+      // Unlock driver only if no open past-due balances remain
       const pastDue = await tx
         .select({ c: sql<number>`count(*)::int` })
         .from(balances)
@@ -479,9 +526,9 @@ export async function settleBalance(posterId: string, balanceId: string) {
           .set({ status: 'active', updatedAt: new Date() })
           .where(eq(users.id, balance.driverId));
       }
-    }
-    return updated;
-  });
+      return updated;
+    }),
+  );
 }
 
 export async function listBalances(userId: string) {
