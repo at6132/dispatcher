@@ -4,13 +4,14 @@ import {
   getApprovedTelegramChatIds,
   getTelegramBotToken,
   isApprovedTelegramChat,
-  sendTelegramRaw,
+  sendTelegramPlain,
 } from '../lib/telegram.js';
 import {
   resolveChallengeByCommand,
   revokeAllAdminSessions,
 } from '../services/adminAuth.js';
 import { recordSecurityEvent } from '../lib/securityEvents.js';
+import { getRedis } from '../lib/redis.js';
 
 type TgUpdate = {
   update_id: number;
@@ -24,6 +25,8 @@ type TgUpdate = {
 
 let offset = 0;
 let running = false;
+
+const POLL_LOCK = 'worker:telegram-admin-poll';
 
 async function handleText(
   chatId: string,
@@ -41,7 +44,7 @@ async function handleText(
       shortCode: arg,
       chatId,
     });
-    await sendTelegramRaw(result.message);
+    await sendTelegramPlain(chatId, result.message.replace(/`/g, ''));
     log?.info(
       {
         event: 'worker.telegram_admin.command',
@@ -62,18 +65,19 @@ async function handleText(
       detail: { chatId, revoked: n },
       alert: true,
     });
-    await sendTelegramRaw(`Revoked ${n} admin session(s).`);
+    await sendTelegramPlain(chatId, `Revoked ${n} admin session(s).`);
     return;
   }
 
   if (cmd === '/adminhelp' || cmd === '/start') {
-    await sendTelegramRaw(
+    await sendTelegramPlain(
+      chatId,
       [
-        '*Dispatcher admin bot*',
-        '`/allow` or `/allow CODE` — approve pending login',
-        '`/deny` or `/deny CODE` — deny pending login',
-        '`/logoutall` — revoke all admin sessions',
-        '`/adminhelp` — this help',
+        'Dispatcher admin bot',
+        '/allow or /allow CODE — approve pending login',
+        '/deny or /deny CODE — deny pending login',
+        '/logoutall — revoke all admin sessions',
+        '/adminhelp — this help',
       ].join('\n'),
     );
   }
@@ -82,6 +86,15 @@ async function handleText(
 async function pollOnce(log?: FastifyBaseLogger): Promise<void> {
   const token = getTelegramBotToken();
   if (!token || getApprovedTelegramChatIds().length === 0) return;
+
+  // Only one replica / process should long-poll at a time.
+  try {
+    const redis = getRedis();
+    const got = await redis.set(POLL_LOCK, '1', 'EX', 40, 'NX');
+    if (got !== 'OK') return;
+  } catch {
+    // If Redis is down, still try to poll (single replica assumption).
+  }
 
   const url = new URL(`https://api.telegram.org/bot${token}/getUpdates`);
   url.searchParams.set('timeout', '25');
@@ -125,8 +138,18 @@ async function pollOnce(log?: FastifyBaseLogger): Promise<void> {
       await handleText(chatId, msg.text, log);
     } catch (err) {
       log?.error(
-        { event: 'worker.telegram_admin.handle_fail', err },
+        {
+          event: 'worker.telegram_admin.handle_fail',
+          err: err instanceof Error ? err.message : String(err),
+          stack: err instanceof Error ? err.stack?.slice(0, 400) : undefined,
+          chatId,
+          text: msg.text.slice(0, 80),
+        },
         'worker.telegram_admin.handle_fail',
+      );
+      await sendTelegramPlain(
+        chatId,
+        'Admin command failed on the server. Try again in a moment.',
       );
     }
   }
@@ -145,7 +168,10 @@ export function startTelegramAdminWorker(
         await pollOnce(log);
       } catch (err) {
         log?.error(
-          { event: 'worker.telegram_admin.loop_fail', err },
+          {
+            event: 'worker.telegram_admin.loop_fail',
+            err: err instanceof Error ? err.message : String(err),
+          },
           'worker.telegram_admin.loop_fail',
         );
         await new Promise((r) => setTimeout(r, 3000));

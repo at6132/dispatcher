@@ -220,7 +220,36 @@ export function notifyTelegramForce(input: TelegramAlertInput): void {
   });
 }
 
-/** Send raw Markdown text to all approved chats. Never throws. */
+async function sendToChatPlain(
+  token: string,
+  chatId: string,
+  text: string,
+): Promise<void> {
+  const url = `https://api.telegram.org/bot${token}/sendMessage`;
+  const res = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      chat_id: chatId,
+      text,
+      disable_web_page_preview: true,
+    }),
+  });
+  if (!res.ok) {
+    const body = await res.text().catch(() => '');
+    // eslint-disable-next-line no-console
+    console.error(
+      JSON.stringify({
+        event: 'telegram.send.fail',
+        chatId,
+        status: res.status,
+        body: body.slice(0, 200),
+      }),
+    );
+  }
+}
+
+/** Send Markdown text to all approved chats. Never throws. */
 export async function sendTelegramRaw(text: string): Promise<void> {
   try {
     const token = botToken();
@@ -232,6 +261,26 @@ export async function sendTelegramRaw(text: string): Promise<void> {
     console.error(
       JSON.stringify({
         event: 'telegram.raw.fail',
+        err: err instanceof Error ? err.message : String(err),
+      }),
+    );
+  }
+}
+
+/** Plain-text reply to one chat (no Markdown parse risks). Never throws. */
+export async function sendTelegramPlain(
+  chatId: string,
+  text: string,
+): Promise<void> {
+  try {
+    const token = botToken();
+    if (!token) return;
+    await sendToChatPlain(token, chatId, text);
+  } catch (err) {
+    // eslint-disable-next-line no-console
+    console.error(
+      JSON.stringify({
+        event: 'telegram.plain.fail',
         err: err instanceof Error ? err.message : String(err),
       }),
     );
