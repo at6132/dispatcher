@@ -20,6 +20,7 @@ import {
   listDrives,
   settleBalance,
   unassignDrive,
+  updateDrive,
 } from '../services/drives.js';
 import { toPublicProfile } from '../services/auth.js';
 
@@ -189,6 +190,58 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
       return reply.send({ drive });
     } catch (err) {
       if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.patch('/:id', async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    const body = z
+      .object({
+        routeText: z.string().min(1).max(2000),
+        passengerPhone: z.string().min(5).max(32),
+        vehicleClass: z.enum([
+          'sedan',
+          'suv',
+          'large_suv',
+          'minivan',
+          'sprinter',
+        ]),
+        seats: z.coerce.number().int().min(1).max(20),
+        tripType: z.enum(['one_way', 'round_trip']),
+        address: z.string().max(500).optional(),
+        extraInfo: z.string().max(2000).optional(),
+        fromPlace: z.string().max(200).optional(),
+        toPlace: z.string().max(200).optional(),
+      })
+      .safeParse(request.body);
+    if (!params.success || !body.success) {
+      return sendError(reply, 400, 'Invalid request', 'invalid_request');
+    }
+    try {
+      const user = requireUser(request);
+      await assertClientLimits(request, reply, {
+        name: 'drive_update',
+        ipLimit: 40,
+        userLimit: 30,
+        windowSec: 3600,
+        failClosed: true,
+      });
+      const drive = await updateDrive(user.id, params.data.id, body.data);
+      logDomain(request.log, 'drives.update.ok', {
+        requestId: request.id,
+        userId: shortId(user.id),
+        driveId: shortId(params.data.id),
+      });
+      return reply.send({ drive });
+    } catch (err) {
+      if (err instanceof AppError) {
+        logDomainWarn(request.log, 'drives.update.fail', {
+          requestId: request.id,
+          code: err.code,
+        });
         return sendError(reply, err.statusCode, err.message, err.code);
       }
       throw err;

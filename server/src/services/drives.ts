@@ -171,6 +171,90 @@ export async function createDrive(
   return mapDrive(row, posterId);
 }
 
+export async function updateDrive(
+  posterId: string,
+  driveId: string,
+  input: {
+    routeText: string;
+    passengerPhone: string;
+    vehicleClass: (typeof vehicleClasses)[number];
+    seats: number;
+    tripType: (typeof tripTypes)[number];
+    address?: string;
+    extraInfo?: string;
+    fromPlace?: string;
+    toPlace?: string;
+  },
+): Promise<DriveDto> {
+  const [existing] = await db
+    .select()
+    .from(drives)
+    .where(eq(drives.id, driveId))
+    .limit(1);
+  if (!existing) throw new AppError(404, 'Drive not found', 'drive_not_found');
+  if (existing.posterId !== posterId) {
+    throw new AppError(403, 'Only the poster can edit this drive', 'forbidden');
+  }
+  if (existing.status !== 'open') {
+    throw new AppError(409, 'Only open drives can be edited', 'drive_not_open');
+  }
+
+  const [poster] = await db
+    .select()
+    .from(users)
+    .where(eq(users.id, posterId))
+    .limit(1);
+  if (!poster) throw new AppError(404, 'User not found', 'user_not_found');
+  if (poster.status === 'locked') {
+    throw new AppError(403, 'Account locked until balances are settled.', 'account_locked');
+  }
+
+  const routeText = input.routeText.trim();
+  if (routeText.length < 2 || routeText.length > 200) {
+    throw new AppError(400, 'Enter a valid title', 'invalid_route');
+  }
+  if (!isValidPhone(input.passengerPhone)) {
+    throw new AppError(400, 'Enter a valid passenger phone', 'invalid_passenger_phone');
+  }
+  if (!vehicleClasses.includes(input.vehicleClass)) {
+    throw new AppError(400, 'Pick a vehicle class', 'invalid_vehicle_class');
+  }
+  if (!Number.isInteger(input.seats) || input.seats < 1 || input.seats > 20) {
+    throw new AppError(400, 'Enter a valid seat count', 'invalid_seats');
+  }
+  if (!tripTypes.includes(input.tripType)) {
+    throw new AppError(400, 'Pick one way or round trip', 'invalid_trip_type');
+  }
+  const address = input.address?.trim() || undefined;
+  if (address && address.length > 300) {
+    throw new AppError(400, 'Address is too long', 'invalid_address');
+  }
+  const extraInfo = input.extraInfo?.trim() || undefined;
+  if (extraInfo && extraInfo.length > 1000) {
+    throw new AppError(400, 'Extra info is too long', 'invalid_extra_info');
+  }
+
+  const [row] = await db
+    .update(drives)
+    .set({
+      routeText,
+      passengerPhone: normalizePhone(input.passengerPhone),
+      vehicleClass: input.vehicleClass,
+      seats: input.seats,
+      tripType: input.tripType,
+      address: address ?? null,
+      extraInfo: extraInfo ?? null,
+      fromPlace: input.fromPlace?.trim() || null,
+      toPlace: input.toPlace?.trim() || null,
+      updatedAt: new Date(),
+    })
+    .where(eq(drives.id, driveId))
+    .returning();
+  if (!row) throw new AppError(500, 'Could not update drive', 'update_failed');
+  await getRedis().del('board:open');
+  return mapDrive(row, posterId);
+}
+
 export async function listDrives(
   viewerId: string,
   query: { status?: string; completed?: boolean; limit?: number; cursor?: string },
@@ -379,8 +463,31 @@ export async function acceptApplication(
       if (drive.posterId !== posterId) {
         throw new AppError(403, 'Only the poster can accept', 'forbidden');
       }
-      if (drive.status !== 'open') {
-        throw new AppError(409, 'Drive is not open', 'drive_not_open');
+      if (drive.status !== 'open' || drive.assigneeId) {
+        throw new AppError(
+          409,
+          'This drive already has a driver',
+          'drive_already_assigned',
+        );
+      }
+
+      const [existingAccepted] = await tx
+        .select({ id: applications.id })
+        .from(applications)
+        .where(
+          and(
+            eq(applications.driveId, driveId),
+            eq(applications.status, 'accepted'),
+          ),
+        )
+        .limit(1)
+        .for('update');
+      if (existingAccepted) {
+        throw new AppError(
+          409,
+          'This drive already has a driver',
+          'drive_already_assigned',
+        );
       }
 
       const [app] = await tx

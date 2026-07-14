@@ -1,10 +1,11 @@
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
   FlatList,
   Pressable,
   RefreshControl,
+  SectionList,
   StyleSheet,
   Text,
   useWindowDimensions,
@@ -57,12 +58,42 @@ const emptyBoard = (): BoardState => ({
   loaded: false,
 });
 
+type ActiveSection = {
+  key: 'dispatched' | 'my_drives';
+  title: string;
+  data: DriveListItem[];
+};
+
+function splitActiveSections(
+  items: DriveListItem[],
+  viewerId: string | undefined,
+): ActiveSection[] {
+  const dispatched: DriveListItem[] = [];
+  const myDrives: DriveListItem[] = [];
+  for (const item of items) {
+    if (viewerId != null && item.posterId === viewerId) {
+      dispatched.push(item);
+    } else {
+      myDrives.push(item);
+    }
+  }
+  return [
+    { key: 'dispatched', title: 'Dispatched', data: dispatched },
+    { key: 'my_drives', title: 'My Drives', data: myDrives },
+  ];
+}
+
 type HomeScreenProps = {
   /** Bump to refetch boards after an external mutation. */
   refreshToken?: number;
+  /** Open board — manage a drive you posted. */
+  onManageDrive?: (drive: DriveListItem) => void;
 };
 
-export function HomeScreen({ refreshToken = 0 }: HomeScreenProps) {
+export function HomeScreen({
+  refreshToken = 0,
+  onManageDrive,
+}: HomeScreenProps) {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const pagerRef = useRef<Animated.ScrollView>(null);
@@ -219,6 +250,47 @@ export function HomeScreen({ refreshToken = 0 }: HomeScreenProps) {
 
   const padBottom = bottomNavClearance(insets.bottom) + space.lg;
 
+  const activeSections = useMemo(
+    () => splitActiveSections(boards.active.items, user?.id),
+    [boards.active.items, user?.id],
+  );
+
+  const renderDriveCard = (item: DriveListItem, board: DriveBoard) => (
+    <DriveCard
+      drive={item}
+      viewerId={user?.id}
+      onApply={
+        board === 'open' ? () => void onApply(item.id) : undefined
+      }
+      onManage={
+        board === 'open' ? () => onManageDrive?.(item) : undefined
+      }
+      applying={applyingId === item.id}
+      applied={appliedIds.has(item.id)}
+    />
+  );
+
+  const listEmpty = (board: (typeof BOARDS)[number], state: BoardState) => (
+    <View style={styles.empty}>
+      {state.error ? (
+        <>
+          <Text style={styles.emptyTitle}>Couldn’t load</Text>
+          <Text style={styles.emptyBody}>{state.error}</Text>
+          <Button variant="ghost" onPress={() => void loadBoard(board.key)}>
+            Try again
+          </Button>
+        </>
+      ) : (
+        <>
+          <Text style={styles.emptyTitle}>{board.empty}</Text>
+          <Text style={styles.emptyBody}>
+            Pull to refresh when something new posts.
+          </Text>
+        </>
+      )}
+    </View>
+  );
+
   return (
     <View style={styles.root}>
       <View
@@ -289,6 +361,14 @@ export function HomeScreen({ refreshToken = 0 }: HomeScreenProps) {
       >
         {BOARDS.map((b) => {
           const state = boards[b.key];
+          const refresh = (
+            <RefreshControl
+              refreshing={state.refreshing}
+              onRefresh={() => void loadBoard(b.key, 'refresh')}
+              tintColor={colors.accent}
+            />
+          );
+
           return (
             <View key={b.key} style={[styles.page, { width: pageWidth }]}>
               {state.loading && !state.loaded ? (
@@ -296,6 +376,42 @@ export function HomeScreen({ refreshToken = 0 }: HomeScreenProps) {
                   <ActivityIndicator color={colors.accent} />
                   <LoadingHint label="Loading drives…" />
                 </View>
+              ) : b.key === 'active' ? (
+                <SectionList
+                  sections={
+                    state.items.length === 0 ? [] : activeSections
+                  }
+                  keyExtractor={(item) => item.id}
+                  stickySectionHeadersEnabled={false}
+                  contentContainerStyle={[
+                    styles.listContent,
+                    { paddingBottom: padBottom },
+                    state.items.length === 0 && styles.listEmptyGrow,
+                  ]}
+                  showsVerticalScrollIndicator={false}
+                  refreshControl={refresh}
+                  ListEmptyComponent={listEmpty(b, state)}
+                  renderSectionHeader={({ section }) => (
+                    <View
+                      style={[
+                        styles.sectionHeader,
+                        section.key === 'my_drives' &&
+                          styles.sectionHeaderFollow,
+                      ]}
+                    >
+                      <Text style={styles.sectionTitle}>{section.title}</Text>
+                      {section.data.length === 0 ? (
+                        <Text style={styles.sectionEmpty}>
+                          {section.key === 'dispatched'
+                            ? 'Nothing you’ve dispatched.'
+                            : 'No drives assigned to you.'}
+                        </Text>
+                      ) : null}
+                    </View>
+                  )}
+                  renderItem={({ item }) => renderDriveCard(item, 'active')}
+                  ItemSeparatorComponent={() => <View style={styles.sep} />}
+                />
               ) : (
                 <FlatList
                   data={state.items}
@@ -306,36 +422,8 @@ export function HomeScreen({ refreshToken = 0 }: HomeScreenProps) {
                     state.items.length === 0 && styles.listEmptyGrow,
                   ]}
                   showsVerticalScrollIndicator={false}
-                  refreshControl={
-                    <RefreshControl
-                      refreshing={state.refreshing}
-                      onRefresh={() => void loadBoard(b.key, 'refresh')}
-                      tintColor={colors.accent}
-                    />
-                  }
-                  ListEmptyComponent={
-                    <View style={styles.empty}>
-                      {state.error ? (
-                        <>
-                          <Text style={styles.emptyTitle}>Couldn’t load</Text>
-                          <Text style={styles.emptyBody}>{state.error}</Text>
-                          <Button
-                            variant="ghost"
-                            onPress={() => void loadBoard(b.key)}
-                          >
-                            Try again
-                          </Button>
-                        </>
-                      ) : (
-                        <>
-                          <Text style={styles.emptyTitle}>{b.empty}</Text>
-                          <Text style={styles.emptyBody}>
-                            Pull to refresh when something new posts.
-                          </Text>
-                        </>
-                      )}
-                    </View>
-                  }
+                  refreshControl={refresh}
+                  ListEmptyComponent={listEmpty(b, state)}
                   ListHeaderComponent={
                     b.key === 'open' && applyError ? (
                       <Text style={styles.applyError} accessibilityRole="alert">
@@ -343,19 +431,7 @@ export function HomeScreen({ refreshToken = 0 }: HomeScreenProps) {
                       </Text>
                     ) : null
                   }
-                  renderItem={({ item }) => (
-                    <DriveCard
-                      drive={item}
-                      viewerId={user?.id}
-                      onApply={
-                        b.key === 'open'
-                          ? () => void onApply(item.id)
-                          : undefined
-                      }
-                      applying={applyingId === item.id}
-                      applied={appliedIds.has(item.id)}
-                    />
-                  )}
+                  renderItem={({ item }) => renderDriveCard(item, b.key)}
                   ItemSeparatorComponent={() => <View style={styles.sep} />}
                 />
               )}
@@ -431,6 +507,25 @@ const styles = StyleSheet.create({
   },
   sep: {
     height: space.md,
+  },
+  sectionHeader: {
+    gap: space.xs,
+    paddingBottom: space.sm,
+  },
+  sectionHeaderFollow: {
+    paddingTop: space.md,
+  },
+  sectionTitle: {
+    ...type.label,
+    color: colors.faint,
+    textTransform: 'uppercase',
+    paddingLeft: space.xs,
+  },
+  sectionEmpty: {
+    ...type.caption,
+    color: colors.muted,
+    paddingLeft: space.xs,
+    paddingBottom: space.xs,
   },
   centered: {
     flex: 1,

@@ -12,7 +12,7 @@ Expo (SDK 54) + Fastify API for a **shared drive board** used by ~500–600 driv
 | `/` | Expo Go client (React Native / TypeScript) |
 | `server/` | API — auth, onboarding, drives, balances (Railway + Postgres + Redis) |
 
-Auth + onboarding hit the API today. Home / Bank / create-drive still lean on demo or stubs in places — wire to the drives board per the product brief.
+Auth, onboarding, home board, create-drive, and bank balances hit the API.
 
 ## Client
 

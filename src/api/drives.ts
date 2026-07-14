@@ -123,6 +123,46 @@ export async function createDrive(input: CreateDriveInput): Promise<Drive> {
   return data.drive;
 }
 
+export async function updateDrive(
+  driveId: string,
+  input: CreateDriveInput,
+): Promise<Drive> {
+  const data = await apiFetch<{ drive: Drive }>(`/v1/drives/${driveId}`, {
+    method: 'PATCH',
+    body: JSON.stringify(input),
+  });
+  return data.drive;
+}
+
+export type DriveApplication = {
+  id: string;
+  status: 'pending' | 'accepted' | 'rejected';
+  lat?: number;
+  lng?: number;
+  createdAt: string;
+  driver: PublicProfile & { phone?: string };
+};
+
+export async function listApplications(
+  driveId: string,
+): Promise<DriveApplication[]> {
+  const data = await apiFetch<{ items: DriveApplication[] }>(
+    `/v1/drives/${driveId}/applications`,
+  );
+  return data.items ?? [];
+}
+
+export async function acceptApplication(
+  driveId: string,
+  applicationId: string,
+): Promise<Drive> {
+  const data = await apiFetch<{ drive: Drive }>(`/v1/drives/${driveId}/accept`, {
+    method: 'POST',
+    body: JSON.stringify({ applicationId }),
+  });
+  return data.drive;
+}
+
 export async function applyToDrive(
   driveId: string,
   coords?: { lat?: number; lng?: number },

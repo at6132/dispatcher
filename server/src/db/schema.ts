@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import {
   boolean,
   index,
@@ -159,6 +160,9 @@ export const applications = pgTable(
   },
   (t) => [
     uniqueIndex('applications_drive_driver_uidx').on(t.driveId, t.driverId),
+    uniqueIndex('applications_one_accepted_uidx')
+      .on(t.driveId)
+      .where(sql`${t.status} = 'accepted'`),
     index('applications_drive_idx').on(t.driveId),
   ],
 );

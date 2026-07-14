@@ -21,6 +21,8 @@ export type DriveCardProps = {
   viewerId?: string;
   /** Open board only — show Apply when the viewer didn’t post this drive. */
   onApply?: () => void;
+  /** Open board only — show Manage when the viewer posted this drive. */
+  onManage?: () => void;
   applying?: boolean;
   applied?: boolean;
 };
@@ -58,6 +60,7 @@ export function DriveCard({
   drive,
   viewerId,
   onApply,
+  onManage,
   applying = false,
   applied = false,
 }: DriveCardProps) {
@@ -108,6 +111,7 @@ export function DriveCard({
     .join(' · ');
 
   const showApply = onApply != null && !isPoster;
+  const showManage = onManage != null && isPoster;
 
   const pressScale = useRef(new Animated.Value(1)).current;
   const success = useRef(new Animated.Value(applied ? 1 : 0)).current;
@@ -246,7 +250,23 @@ export function DriveCard({
         ) : null}
       </View>
 
-      {showApply ? (
+      {showManage ? (
+        <Animated.View style={{ transform: [{ scale: pressScale }] }}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Manage"
+            onPress={onManage}
+            onPressIn={() => animatePress(motion.pressScale)}
+            onPressOut={() => animatePress(1)}
+            style={({ pressed }) => [
+              styles.manageBtn,
+              pressed && styles.manageBtnPressed,
+            ]}
+          >
+            <Text style={styles.manageLabel}>Manage</Text>
+          </Pressable>
+        </Animated.View>
+      ) : showApply ? (
         applied ? (
           <View style={styles.successWrap}>
             <Animated.View
@@ -448,6 +468,25 @@ const styles = StyleSheet.create({
     fontSize: 15,
     letterSpacing: -0.1,
     color: colors.onAccent,
+  },
+  manageBtn: {
+    minHeight: 52,
+    borderRadius: radius.control,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: space.xl,
+    backgroundColor: colors.accentMuted,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassBorder,
+  },
+  manageBtnPressed: {
+    opacity: 0.92,
+  },
+  manageLabel: {
+    fontFamily: fonts.sansSemi,
+    fontSize: 15,
+    letterSpacing: -0.1,
+    color: colors.ink,
   },
   successWrap: {
     position: 'relative',

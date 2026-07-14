@@ -14,6 +14,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { X } from 'lucide-react-native';
 
 import { createDrive } from '../api/drives';
 import { mapApiError } from '../api/errors';
@@ -30,6 +31,7 @@ import {
 import type { AddOrigin } from '../components/navigation/BottomNav';
 import { Button } from '../components/ui/Button';
 import { ChoiceGroup } from '../components/ui/ChoiceGroup';
+import { Icon } from '../components/ui/Icon';
 import { LoadingHint } from '../components/ui/LoadingHint';
 import { NumberStepper } from '../components/ui/NumberStepper';
 import { TextField } from '../components/ui/TextField';
@@ -37,7 +39,6 @@ import { MistBackdrop, colors, fonts, space, type } from '../theme';
 
 type CreateDriveSheetProps = {
   visible: boolean;
-  /** Screen coords of the + — circle expands from here. */
   origin: AddOrigin | null;
   onClose: () => void;
   onCreated: () => void;
@@ -61,10 +62,7 @@ export function CreateDriveSheet({
   const { user } = useAuth();
   const [mounted, setMounted] = useState(visible);
 
-  /** 0 = plus-sized circle · 1 = full reveal */
-  const reveal = useRef(new Animated.Value(0)).current;
-  /** Content fades after the circle has already covered the screen */
-  const content = useRef(new Animated.Value(0)).current;
+  const progress = useRef(new Animated.Value(0)).current;
 
   const [title, setTitle] = useState('');
   const [phone, setPhone] = useState('');
@@ -82,19 +80,14 @@ export function CreateDriveSheet({
   const originRef = useRef(origin);
   if (visible && origin) originRef.current = origin;
 
-  const geometry = useMemo(() => {
+  const morph = useMemo(() => {
     const o = originRef.current;
     const face = o?.width ?? 96;
-    const ox = o ? o.x + o.width / 2 : winW / 2;
-    const oy = o ? o.y + o.height / 2 : winH - 80;
-    // Big enough that a circle centered on + covers every corner.
-    const disc = Math.sqrt(winW * winW + winH * winH) * 1.2;
     return {
-      face,
-      disc,
-      left: ox - disc / 2,
-      top: oy - disc / 2,
-      startScale: face / disc,
+      startLeft: o?.x ?? winW / 2 - face / 2,
+      startTop: o?.y ?? winH - face - 48,
+      startSize: face,
+      startRadius: face / 2,
     };
   }, [visible, winW, winH]);
 
@@ -114,48 +107,29 @@ export function CreateDriveSheet({
   useEffect(() => {
     if (visible) {
       setMounted(true);
-      reveal.setValue(0);
-      content.setValue(0);
-
-      Animated.sequence([
-        Animated.timing(reveal, {
-          toValue: 1,
-          duration: 480,
-          easing: Easing.bezier(0.22, 1, 0.36, 1),
-          useNativeDriver: true,
-        }),
-        Animated.timing(content, {
-          toValue: 1,
-          duration: 220,
-          easing: Easing.out(Easing.cubic),
-          useNativeDriver: true,
-        }),
-      ]).start();
+      progress.setValue(0);
+      Animated.timing(progress, {
+        toValue: 1,
+        duration: 420,
+        easing: Easing.bezier(0.22, 1, 0.36, 1),
+        useNativeDriver: false,
+      }).start();
       return;
     }
 
     if (!mounted) return;
-
-    Animated.sequence([
-      Animated.timing(content, {
-        toValue: 0,
-        duration: 140,
-        easing: Easing.in(Easing.quad),
-        useNativeDriver: true,
-      }),
-      Animated.timing(reveal, {
-        toValue: 0,
-        duration: 360,
-        easing: Easing.bezier(0.4, 0, 0.7, 0.15),
-        useNativeDriver: true,
-      }),
-    ]).start(({ finished }) => {
+    Animated.timing(progress, {
+      toValue: 0,
+      duration: 280,
+      easing: Easing.bezier(0.4, 0, 1, 0.2),
+      useNativeDriver: false,
+    }).start(({ finished }) => {
       if (finished) {
         setMounted(false);
         resetForm();
       }
     });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- visibility-driven open/close
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- visibility-driven
   }, [visible]);
 
   const titleError =
@@ -208,23 +182,39 @@ export function CreateDriveSheet({
     }
   };
 
-  // Pure radial grow — no translate of the whole screen (that read as “fly in”).
-  const discScale = reveal.interpolate({
+  const screenOpacity = progress.interpolate({
+    inputRange: [0, 0.35, 1],
+    outputRange: [0, 1, 1],
+  });
+
+  const blobLeft = progress.interpolate({
     inputRange: [0, 1],
-    outputRange: [geometry.startScale, 1],
+    outputRange: [morph.startLeft, 0],
   });
-  const mistOpacity = reveal.interpolate({
-    inputRange: [0, 0.35, 0.7, 1],
-    outputRange: [0, 0.15, 0.85, 1],
+  const blobTop = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [morph.startTop, 0],
   });
-  const steelOpacity = reveal.interpolate({
+  const blobWidth = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [morph.startSize, winW],
+  });
+  const blobHeight = progress.interpolate({
+    inputRange: [0, 1],
+    outputRange: [morph.startSize, winH],
+  });
+  const blobRadius = progress.interpolate({
+    inputRange: [0, 0.5, 1],
+    outputRange: [morph.startRadius, 24, 0],
+  });
+  const blobOpacity = progress.interpolate({
     inputRange: [0, 0.45, 0.85],
-    outputRange: [1, 0.55, 0],
+    outputRange: [1, 0.5, 0],
   });
-  const contentOpacity = content;
-  const contentLift = content.interpolate({
-    inputRange: [0, 1],
-    outputRange: [14, 0],
+
+  const contentOpacity = progress.interpolate({
+    inputRange: [0, 0.45, 0.75, 1],
+    outputRange: [0, 0, 1, 1],
   });
 
   if (!mounted) return null;
@@ -235,52 +225,57 @@ export function CreateDriveSheet({
       transparent
       animationType="none"
       statusBarTranslucent
+      presentationStyle="overFullScreen"
       onRequestClose={requestClose}
     >
       <View style={styles.root}>
-        <Animated.View
-          pointerEvents="none"
-          style={[
-            styles.disc,
-            {
-              width: geometry.disc,
-              height: geometry.disc,
-              borderRadius: geometry.disc / 2,
-              left: geometry.left,
-              top: geometry.top,
-              transform: [{ scale: discScale }],
-            },
-          ]}
-        >
-          <Animated.View
-            style={[styles.steelFill, { opacity: steelOpacity }]}
-          />
-          <Animated.View
-            style={[styles.mistClip, { opacity: mistOpacity }]}
-          >
-            <MistBackdrop style={styles.fill} />
-          </Animated.View>
+        <Animated.View style={[styles.fullScreen, { opacity: screenOpacity }]}>
+          <MistBackdrop style={styles.fill} />
         </Animated.View>
 
         <Animated.View
+          pointerEvents="none"
           style={[
-            styles.screen,
+            styles.blob,
             {
-              opacity: contentOpacity,
-              transform: [{ translateY: contentLift }],
+              left: blobLeft,
+              top: blobTop,
+              width: blobWidth,
+              height: blobHeight,
+              borderRadius: blobRadius,
+              opacity: blobOpacity,
+              backgroundColor: colors.accent,
             },
           ]}
-        >
+        />
+
+        <Animated.View style={[styles.screen, { opacity: contentOpacity }]}>
           <KeyboardAvoidingView
             style={styles.flex}
             behavior={Platform.OS === 'ios' ? 'padding' : undefined}
           >
+            <View style={[styles.topBar, { paddingTop: insets.top + space.sm }]}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Close"
+                hitSlop={12}
+                disabled={submitting}
+                onPress={requestClose}
+                style={({ pressed }) => [
+                  styles.closeBtn,
+                  pressed && styles.closeBtnPressed,
+                  submitting && styles.closeBtnDisabled,
+                ]}
+              >
+                <Icon icon={X} size="md" color={colors.inkSoft} />
+              </Pressable>
+            </View>
+
             <ScrollView
               style={styles.flex}
               contentContainerStyle={[
                 styles.form,
                 {
-                  paddingTop: insets.top + space.xl,
                   paddingBottom: insets.bottom + space.xxl,
                 },
               ]}
@@ -372,13 +367,6 @@ export function CreateDriveSheet({
                 >
                   Post drive
                 </Button>
-                <Button
-                  variant="quiet"
-                  disabled={submitting}
-                  onPress={requestClose}
-                >
-                  Cancel
-                </Button>
                 {submitting ? <LoadingHint label="Posting…" /> : null}
               </View>
             </ScrollView>
@@ -393,22 +381,36 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
   },
-  disc: {
-    position: 'absolute',
-    overflow: 'hidden',
-  },
-  steelFill: {
-    ...StyleSheet.absoluteFillObject,
-    backgroundColor: colors.accent,
-  },
-  mistClip: {
+  fullScreen: {
     ...StyleSheet.absoluteFillObject,
   },
   fill: {
-    flex: 1,
+    ...StyleSheet.absoluteFillObject,
+  },
+  blob: {
+    position: 'absolute',
   },
   screen: {
     ...StyleSheet.absoluteFillObject,
+  },
+  topBar: {
+    paddingHorizontal: space.lg,
+    paddingBottom: space.sm,
+    alignItems: 'flex-end',
+  },
+  closeBtn: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accentMuted,
+  },
+  closeBtnPressed: {
+    opacity: 0.85,
+  },
+  closeBtnDisabled: {
+    opacity: 0.45,
   },
   flex: {
     flex: 1,

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   Keyboard,
   KeyboardAvoidingView,
@@ -20,8 +20,10 @@ import {
 } from '../../auth/onboardingValidation';
 import {
   VEHICLE_CLASS_OPTIONS,
+  type OnboardingProfile,
   type VehicleClass,
 } from '../../auth/types';
+import { readPendingOnboarding } from '../../auth/userStore';
 import { Button } from '../../components/ui/Button';
 import { ChoiceGroup } from '../../components/ui/ChoiceGroup';
 import { LoadingHint } from '../../components/ui/LoadingHint';
@@ -75,9 +77,35 @@ const STEP_COPY: Record<
   },
 };
 
+function applyDraft(
+  draft: OnboardingProfile,
+  setters: {
+    setVehicleClass: (v: VehicleClass) => void;
+    setVehicleType: (v: string) => void;
+    setSeats: (v: number) => void;
+    setSelfPhotoUri: (v: string | undefined) => void;
+    setVehicleInteriorUri: (v: string | undefined) => void;
+    setVehicleExteriorUri: (v: string | undefined) => void;
+    setYearsDrivingUpstate: (v: number) => void;
+    setExtraInfo: (v: string) => void;
+    setZelle: (v: string) => void;
+  },
+) {
+  setters.setVehicleClass(draft.vehicleClass);
+  setters.setVehicleType(draft.vehicleType);
+  setters.setSeats(draft.seats);
+  setters.setSelfPhotoUri(draft.selfPhotoUri);
+  setters.setVehicleInteriorUri(draft.vehicleInteriorUri);
+  setters.setVehicleExteriorUri(draft.vehicleExteriorUri);
+  setters.setYearsDrivingUpstate(draft.yearsDrivingUpstate);
+  setters.setExtraInfo(draft.extraInfo ?? '');
+  setters.setZelle(draft.zelle ?? '');
+}
+
 export function OnboardingScreen() {
   const insets = useSafeAreaInsets();
   const { completeOnboarding } = useAuth();
+  const autoRetryRef = useRef(false);
 
   const [step, setStep] = useState<Step>(0);
   const [vehicleClass, setVehicleClass] = useState<VehicleClass | null>(null);
@@ -112,6 +140,71 @@ export function OnboardingScreen() {
 
   const copy = STEP_COPY[step];
   const canPickPhotos = photoAccess === 'all' || photoAccess === 'limited';
+
+  const submitProfile = async (profile: OnboardingProfile) => {
+    setSubmitting(true);
+    setFormError(null);
+    logger.info('onboarding', 'submit.start', {
+      vehicleClass: profile.vehicleClass,
+      seats: profile.seats,
+      yearsDrivingUpstate: profile.yearsDrivingUpstate,
+      hasSelfPhoto: Boolean(profile.selfPhotoUri),
+      hasInterior: Boolean(profile.vehicleInteriorUri),
+      hasExterior: Boolean(profile.vehicleExteriorUri),
+      hasZelle: Boolean(profile.zelle?.trim()),
+    });
+    try {
+      // Auth seals onboardingComplete optimistically — Root will leave this
+      // screen. Don’t clear submitting / show errors after unmount.
+      await completeOnboarding(profile);
+      logger.info('onboarding', 'submit.ok');
+    } catch (err) {
+      const mapped = mapApiError(err, 'onboarding');
+      logger.error('onboarding', 'submit.fail', {
+        message: mapped.message,
+        code: mapped.code,
+        requestId: (err as { requestId?: string }).requestId,
+        status: (err as { status?: number }).status,
+      });
+      // Transient failures keep the optimistic seal — only show copy if we’re
+      // still on this screen (permanent validation failure).
+      setFormError(mapped.message);
+      setSubmitting(false);
+    }
+  };
+
+  // Restore a prior Finish draft so a failed first save never means re-typing.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      const pending = await readPendingOnboarding();
+      if (!alive || !pending) return;
+      logger.info('onboarding', 'hydrate_pending', {
+        vehicleClass: pending.vehicleClass,
+        seats: pending.seats,
+      });
+      applyDraft(pending, {
+        setVehicleClass,
+        setVehicleType,
+        setSeats,
+        setSelfPhotoUri,
+        setVehicleInteriorUri,
+        setVehicleExteriorUri,
+        setYearsDrivingUpstate,
+        setExtraInfo,
+        setZelle,
+      });
+      setStep(4);
+      if (autoRetryRef.current) return;
+      autoRetryRef.current = true;
+      // One silent retry — same path as Finish, no wizard redo.
+      await submitProfile(pending);
+    })();
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount-only hydrate
+  }, []);
 
   const goNext = async () => {
     Keyboard.dismiss();
@@ -175,46 +268,19 @@ export function OnboardingScreen() {
       return;
     }
 
-    setSubmitting(true);
-    logger.info('onboarding', 'submit.start', {
-      vehicleClass,
-      seats,
-      yearsDrivingUpstate,
-      hasSelfPhoto: Boolean(selfPhotoUri),
-      hasInterior: Boolean(vehicleInteriorUri),
-      hasExterior: Boolean(vehicleExteriorUri),
-      hasZelle: Boolean(zelle.trim()),
-    });
-    try {
-      // Auth seals onboardingComplete optimistically — Root will leave this
-      // screen. Don’t clear submitting / show errors after unmount.
-      await completeOnboarding(
-        buildOnboardingProfile({
-          vehicleClass,
-          vehicleType,
-          seats,
-          selfPhotoUri,
-          vehicleInteriorUri,
-          vehicleExteriorUri,
-          yearsDrivingUpstate,
-          extraInfo,
-          zelle,
-        }),
-      );
-      logger.info('onboarding', 'submit.ok');
-    } catch (err) {
-      const mapped = mapApiError(err, 'onboarding');
-      logger.error('onboarding', 'submit.fail', {
-        message: mapped.message,
-        code: mapped.code,
-        requestId: (err as { requestId?: string }).requestId,
-        status: (err as { status?: number }).status,
-      });
-      // Completion is sealed optimistically + retried on bootstrap. Only show
-      // an error if we’re somehow still on this screen.
-      setFormError(mapped.message);
-      setSubmitting(false);
-    }
+    await submitProfile(
+      buildOnboardingProfile({
+        vehicleClass,
+        vehicleType,
+        seats,
+        selfPhotoUri,
+        vehicleInteriorUri,
+        vehicleExteriorUri,
+        yearsDrivingUpstate,
+        extraInfo,
+        zelle,
+      }),
+    );
   };
 
   const goBack = () => {

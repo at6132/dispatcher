@@ -46,9 +46,9 @@ Shipping stack: Expo SDK 54, React Native, tokens + surfaces in `src/theme`.
 ## Product patterns (keep consistent)
 
 - **Bottom nav** (`BottomNav`): floating glass dock — **Home** · large steel **circular +** · **Bank**. Compact organic blob sized to the controls (no sparse empty glass). Center hugs the + face; soft taper to the ends. Not edge-to-edge. Tabs use Lucide + uppercase micro-labels.
-- **Main shell** (`MainShell`): Home / Bank tabs with local state + demo data until API is wired
-- **Home**: split hero (“Near” + “*you*”), your listing + nearby `DriverCard`s (`showMap={false}`), clear space for floating dock
-- **Driver listing** (`DriverCard`): what dispatchers see — PFP avatar, `Name · VehicleType` same size on one line, phone, seats/years detail, optional exterior/interior thumbs. Home preview uses `showMap={false}`
+- **Main shell** (`MainShell`): Home / Bank tabs; boards and balances from the API
+- **Home**: split hero (“Near” + “*you*”), open / active / history drive boards, clear space for floating dock
+- **Driver listing** (`DriverCard`): profile surface — PFP avatar, `Name · VehicleType` same size on one line, phone, seats/years detail, optional exterior/interior thumbs
 - **Photos step**: circular PFP for “You”; rectangular pickers for vehicle interior / exterior (max one each). Shared pick queue — don’t block sibling slots
 - **Location step**: permission only — no driver-card preview on that screen. Expo Go maxes at While Using; Always needs a native build
 - **You’re in**: driver card + “Need to make changes? Go to Settings.” — no map chrome there

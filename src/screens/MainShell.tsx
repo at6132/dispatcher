@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
+import type { DriveListItem } from '../api/drives';
 import {
   BottomNav,
   type AddOrigin,
@@ -10,6 +11,7 @@ import { MistBackdrop } from '../theme';
 import { BankScreen } from './BankScreen';
 import { CreateDriveSheet } from './CreateDriveSheet';
 import { HomeScreen } from './HomeScreen';
+import { ManageDriveSheet } from './ManageDriveSheet';
 
 /**
  * Authenticated shell after onboarding — Home / Bank + center add.
@@ -18,14 +20,25 @@ export function MainShell() {
   const [tab, setTab] = useState<MainTab>('home');
   const [composeOpen, setComposeOpen] = useState(false);
   const [addOrigin, setAddOrigin] = useState<AddOrigin | null>(null);
+  const [managingDrive, setManagingDrive] = useState<DriveListItem | null>(
+    null,
+  );
   const [boardRefresh, setBoardRefresh] = useState(0);
+
+  const bumpBoard = () => {
+    setTab('home');
+    setBoardRefresh((n) => n + 1);
+  };
 
   return (
     <MistBackdrop>
       <View style={styles.root}>
         <View style={styles.page}>
           {tab === 'home' ? (
-            <HomeScreen refreshToken={boardRefresh} />
+            <HomeScreen
+              refreshToken={boardRefresh}
+              onManageDrive={setManagingDrive}
+            />
           ) : (
             <BankScreen />
           )}
@@ -41,11 +54,17 @@ export function MainShell() {
         <CreateDriveSheet
           visible={composeOpen}
           origin={addOrigin}
-          onClose={() => setComposeOpen(false)}
-          onCreated={() => {
-            setTab('home');
-            setBoardRefresh((n) => n + 1);
+          onClose={() => {
+            setComposeOpen(false);
+            setAddOrigin(null);
           }}
+          onCreated={bumpBoard}
+        />
+        <ManageDriveSheet
+          visible={managingDrive != null}
+          drive={managingDrive}
+          onClose={() => setManagingDrive(null)}
+          onChanged={bumpBoard}
         />
       </View>
     </MistBackdrop>

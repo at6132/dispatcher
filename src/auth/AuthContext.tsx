@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 
+import { isApiError } from '../api/errors';
 import { logger } from '../debug/logger';
 import {
   authenticateAccount,
@@ -62,6 +63,14 @@ function mergeSession(
   return remote;
 }
 
+function isPermanentOnboardingFailure(err: unknown): boolean {
+  if (!isApiError(err)) return false;
+  if (err.status >= 500) return false;
+  if (err.status === 429) return false;
+  // 4xx validation / config — user must fix and resubmit.
+  return err.status >= 400 && err.status < 500;
+}
+
 /**
  * Auth backed by Dispatcher API.
  * onboardingComplete gates the app until the profile wizard is finished.
@@ -78,6 +87,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const applyUser = useCallback(async (next: AuthUser | null, genBump = false) => {
     if (genBump) sessionGen.current += 1;
     setUser(next);
+    userRef.current = next;
     if (next) {
       await persistUser(next);
     } else {
@@ -88,13 +98,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   useEffect(() => {
     let alive = true;
     const gen = sessionGen.current;
+
+    const stillCurrent = () => alive && gen === sessionGen.current;
+
     (async () => {
       try {
         const cached = await readPersistedUser();
-        if (!alive || gen !== sessionGen.current) return;
+        if (!stillCurrent()) return;
         if (cached) {
           // Show cached session immediately so a remount doesn’t flash the wizard.
           setUser(cached);
+          userRef.current = cached;
           setStatus('authenticated');
           logger.info('auth', 'provider.cache_hydrate', {
             userId: cached.id,
@@ -103,11 +117,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
 
         const sessionUser = await getSessionUser();
-        if (!alive || gen !== sessionGen.current) return;
+        if (!stillCurrent()) return;
 
-        const merged = mergeSession(cached, sessionUser);
+        // Prefer in-memory user (may already be optimistically sealed mid-bootstrap).
+        const local = userRef.current ?? cached;
+        const merged = mergeSession(local, sessionUser);
         if (!merged) {
           setUser(null);
+          userRef.current = null;
           setStatus('unauthenticated');
           await clearPersistedUser();
           logger.info('auth', 'provider.ready', {
@@ -117,32 +134,41 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           return;
         }
 
-        // If server still incomplete but we have a pending draft, retry save once.
-        if (!merged.onboardingComplete) {
-          const pending = await readPendingOnboarding();
-          if (pending) {
-            logger.info('auth', 'provider.retry_pending_onboarding', {
-              userId: merged.id,
+        // Retry anytime the server still says incomplete and we have a draft —
+        // even if local merge sealed the gate (optimistic / stale cache).
+        const pending = await readPendingOnboarding();
+        if (!stillCurrent()) return;
+        if (pending && sessionUser && !sessionUser.onboardingComplete) {
+          logger.info('auth', 'provider.retry_pending_onboarding', {
+            userId: merged.id,
+            localComplete: merged.onboardingComplete,
+          });
+          try {
+            const saved = await saveOnboarding(merged.phone, pending);
+            if (!stillCurrent()) return;
+            const sealed: AuthUser = { ...saved, onboardingComplete: true };
+            await applyUser(sealed);
+            setStatus('authenticated');
+            await clearPendingOnboarding();
+            logger.info('auth', 'provider.retry_pending_ok', {
+              userId: sealed.id,
             });
-            try {
-              const saved = await saveOnboarding(merged.phone, pending);
-              const sealed: AuthUser = { ...saved, onboardingComplete: true };
-              if (!alive || gen !== sessionGen.current) return;
-              await applyUser(sealed);
+            return;
+          } catch (err) {
+            logger.warn('auth', 'provider.retry_pending_fail', {
+              err: err instanceof Error ? err.message : String(err),
+            });
+            // Keep local seal + pending; don’t bounce into the wizard.
+            if (!stillCurrent()) return;
+            if (merged.onboardingComplete) {
+              await applyUser(merged);
               setStatus('authenticated');
-              await clearPendingOnboarding();
-              logger.info('auth', 'provider.retry_pending_ok', {
-                userId: sealed.id,
-              });
               return;
-            } catch (err) {
-              logger.warn('auth', 'provider.retry_pending_fail', {
-                err: err instanceof Error ? err.message : String(err),
-              });
             }
           }
         }
 
+        if (!stillCurrent()) return;
         await applyUser(merged);
         setStatus('authenticated');
         logger.info('auth', 'provider.ready', {
@@ -151,11 +177,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           userId: merged.id,
         });
       } catch (err) {
-        if (!alive || gen !== sessionGen.current) return;
+        if (!stillCurrent()) return;
         const cached = await readPersistedUser();
         if (cached) {
           // Offline / blip — keep cached session instead of bouncing to auth.
           setUser(cached);
+          userRef.current = cached;
           setStatus('authenticated');
           logger.warn('auth', 'provider.bootstrap_failed_use_cache', {
             userId: cached.id,
@@ -167,6 +194,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           err: err instanceof Error ? err.message : String(err),
         });
         setUser(null);
+        userRef.current = null;
         setStatus('unauthenticated');
       }
     })();
@@ -216,7 +244,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!current) throw new Error('Not signed in.');
       logger.info('auth', 'complete_onboarding.start', { userId: current.id });
 
-      // Survive remounts mid-request: draft + optimistic seal.
+      // Survive remounts mid-request: draft + optimistic seal BEFORE network.
       await persistPendingOnboarding(input);
       const optimistic: AuthUser = {
         ...current,
@@ -255,12 +283,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           serverFlag: next.onboardingComplete,
         });
       } catch (err) {
-        // Keep optimistic complete so we don’t bounce into the wizard; pending
-        // draft will retry on next bootstrap. Still surface the error to UI.
-        logger.error('auth', 'complete_onboarding.fail_keep_optimistic', {
-          userId: current.id,
-          err: err instanceof Error ? err.message : String(err),
-        });
+        if (isPermanentOnboardingFailure(err)) {
+          // Bad payload — reopen wizard with the draft still pending.
+          const reverted: AuthUser = {
+            ...current,
+            onboardingComplete: false,
+            onboarding: optimistic.onboarding,
+          };
+          await applyUser(reverted, true);
+          logger.error('auth', 'complete_onboarding.fail_revert', {
+            userId: current.id,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        } else {
+          // Network / blip — stay sealed; pending retries on next bootstrap.
+          logger.error('auth', 'complete_onboarding.fail_keep_optimistic', {
+            userId: current.id,
+            err: err instanceof Error ? err.message : String(err),
+          });
+        }
         throw err;
       }
     },
@@ -273,6 +314,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await clearPersistedUser();
     await clearPendingOnboarding();
     setUser(null);
+    userRef.current = null;
     setStatus('unauthenticated');
     logger.info('auth', 'signed_out');
   }, []);
