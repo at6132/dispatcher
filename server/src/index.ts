@@ -1,10 +1,21 @@
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { migrate } from 'drizzle-orm/postgres-js/migrator';
+
 import { env } from './config/env.js';
 import { buildApp } from './app.js';
-import { closeDb } from './db/client.js';
+import { closeDb, db } from './db/client.js';
 import { closeRedis } from './lib/redis.js';
 import { startSundayLockWorker } from './workers/sundayLock.js';
 
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
 async function main() {
+  const migrationsFolder = path.join(__dirname, '../drizzle');
+  console.log(`Running migrations from ${migrationsFolder}`);
+  await migrate(db, { migrationsFolder });
+  console.log('Migrations complete');
+
   const app = await buildApp();
   const worker = startSundayLockWorker();
 

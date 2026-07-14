@@ -1,4 +1,4 @@
-import type { FastifyReply, FastifyRequest } from 'fastify';
+import type { FastifyRequest } from 'fastify';
 
 import { eq } from 'drizzle-orm';
 
@@ -20,10 +20,7 @@ declare module 'fastify' {
   }
 }
 
-export async function requireAuth(
-  request: FastifyRequest,
-  _reply: FastifyReply,
-): Promise<void> {
+export async function requireAuth(request: FastifyRequest): Promise<void> {
   const header = request.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
     throw new AppError(401, 'Unauthorized', 'unauthorized');
