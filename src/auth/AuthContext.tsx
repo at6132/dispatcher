@@ -2,14 +2,23 @@ import {
   createContext,
   useCallback,
   useContext,
+  useEffect,
   useMemo,
   useState,
   type ReactNode,
 } from 'react';
 
+import {
+  authenticateAccount,
+  clearSession,
+  createAccount,
+  getSessionUser,
+  saveOnboarding,
+} from './sessionStore';
 import type {
   AuthStatus,
   AuthUser,
+  OnboardingInput,
   SignInInput,
   SignUpInput,
 } from './types';
@@ -20,51 +29,83 @@ type AuthContextValue = {
   user: AuthUser | null;
   signIn: (input: SignInInput) => Promise<void>;
   signUp: (input: SignUpInput) => Promise<void>;
+  completeOnboarding: (input: OnboardingInput) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function delay(ms: number) {
-  return new Promise<void>((resolve) => setTimeout(resolve, ms));
-}
-
 /**
- * Frontend session stub — in-memory only.
- * Swap signIn/signUp bodies for real API calls later; keep the same shape.
+ * Auth backed by Dispatcher API.
+ * onboardingComplete gates the app until the profile wizard is finished.
  */
 export function AuthProvider({ children }: { children: ReactNode }) {
-  const [status, setStatus] = useState<AuthStatus>('unauthenticated');
+  const [status, setStatus] = useState<AuthStatus>('bootstrapping');
   const [user, setUser] = useState<AuthUser | null>(null);
 
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const sessionUser = await getSessionUser();
+        if (!alive) return;
+        setUser(sessionUser);
+        setStatus(sessionUser ? 'authenticated' : 'unauthenticated');
+      } catch {
+        if (!alive) return;
+        setUser(null);
+        setStatus('unauthenticated');
+      }
+    })();
+    return () => {
+      alive = false;
+    };
+  }, []);
+
   const signIn = useCallback(async (input: SignInInput) => {
-    await delay(450);
-    setUser({
-      id: 'local',
+    const next = await authenticateAccount({
       phone: normalizePhone(input.phone),
-      name: '',
+      password: input.password,
     });
+    setUser(next);
     setStatus('authenticated');
   }, []);
 
   const signUp = useCallback(async (input: SignUpInput) => {
-    await delay(550);
-    setUser({
-      id: 'local',
+    const next = await createAccount({
       phone: normalizePhone(input.phone),
       name: input.name.trim(),
+      password: input.password,
     });
+    setUser(next);
     setStatus('authenticated');
   }, []);
 
+  const completeOnboarding = useCallback(
+    async (input: OnboardingInput) => {
+      if (!user) throw new Error('Not signed in.');
+      const next = await saveOnboarding(user.phone, input);
+      setUser(next);
+    },
+    [user],
+  );
+
   const signOut = useCallback(async () => {
+    await clearSession();
     setUser(null);
     setStatus('unauthenticated');
   }, []);
 
   const value = useMemo(
-    () => ({ status, user, signIn, signUp, signOut }),
-    [status, user, signIn, signUp, signOut],
+    () => ({
+      status,
+      user,
+      signIn,
+      signUp,
+      completeOnboarding,
+      signOut,
+    }),
+    [status, user, signIn, signUp, completeOnboarding, signOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

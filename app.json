@@ -5,9 +5,14 @@
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
-    "userInterfaceStyle": "light",
+    "userInterfaceStyle": "dark",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "infoPlist": {
+        "UIBackgroundModes": [
+          "location"
+        ]
+      }
     },
     "android": {
       "adaptiveIcon": {
@@ -16,10 +21,43 @@
         "backgroundImage": "./assets/android-icon-background.png",
         "monochromeImage": "./assets/android-icon-monochrome.png"
       },
+      "permissions": [
+        "ACCESS_COARSE_LOCATION",
+        "ACCESS_FINE_LOCATION",
+        "ACCESS_BACKGROUND_LOCATION"
+      ],
       "predictiveBackGestureEnabled": false
     },
     "web": {
       "favicon": "./assets/favicon.png"
-    }
+    },
+    "plugins": [
+      "expo-font",
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Dispatcher needs photo access so you can optionally add a picture of yourself and your vehicle during setup."
+        }
+      ],
+      [
+        "expo-media-library",
+        {
+          "photosPermission": "Dispatcher needs photo access so you can optionally add a picture of yourself and your vehicle during setup.",
+          "savePhotosPermission": "Dispatcher does not save photos to your library.",
+          "preventAutomaticLimitedAccessAlert": false
+        }
+      ],
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "Dispatcher uses your location to match you with nearby rides while you’re using the app.",
+          "locationAlwaysAndWhenInUsePermission": "Dispatcher needs Always location so we can match you with rides even when the app is in the background.",
+          "locationAlwaysPermission": "Dispatcher needs Always location so we can match you with rides even when the app is in the background.",
+          "isIosBackgroundLocationEnabled": true,
+          "isAndroidBackgroundLocationEnabled": true
+        }
+      ],
+      "expo-secure-store"
+    ]
   }
 }

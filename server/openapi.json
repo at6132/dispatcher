@@ -1,0 +1,254 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "Dispatcher API",
+    "version": "1.0.0",
+    "description": "Backend for the Dispatcher Expo app — auth, onboarding, drives board, balances."
+  },
+  "servers": [{ "url": "https://YOUR_RAILWAY_DOMAIN" }],
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "JWT"
+      }
+    },
+    "schemas": {
+      "AuthUser": {
+        "type": "object",
+        "required": ["id", "phone", "name", "onboardingComplete"],
+        "properties": {
+          "id": { "type": "string", "format": "uuid" },
+          "phone": { "type": "string", "example": "+15551234567" },
+          "name": { "type": "string" },
+          "onboardingComplete": { "type": "boolean" },
+          "status": { "type": "string", "enum": ["active", "locked"] },
+          "onboarding": { "$ref": "#/components/schemas/OnboardingProfile" }
+        }
+      },
+      "OnboardingProfile": {
+        "type": "object",
+        "required": ["vehicleClass", "vehicleType", "seats", "yearsDrivingUpstate"],
+        "properties": {
+          "vehicleClass": {
+            "type": "string",
+            "enum": ["sedan", "suv", "large_suv", "minivan", "sprinter"]
+          },
+          "vehicleType": { "type": "string" },
+          "seats": { "type": "integer" },
+          "yearsDrivingUpstate": { "type": "number" },
+          "selfPhotoUri": { "type": "string" },
+          "vehicleInteriorUri": { "type": "string" },
+          "vehicleExteriorUri": { "type": "string" },
+          "extraInfo": { "type": "string" },
+          "zelle": { "type": "string" }
+        }
+      },
+      "TokenPair": {
+        "type": "object",
+        "required": ["accessToken", "refreshToken", "expiresIn", "user"],
+        "properties": {
+          "accessToken": { "type": "string" },
+          "refreshToken": { "type": "string" },
+          "expiresIn": { "type": "integer" },
+          "user": { "$ref": "#/components/schemas/AuthUser" }
+        }
+      },
+      "Error": {
+        "type": "object",
+        "properties": {
+          "error": {
+            "type": "object",
+            "properties": {
+              "message": { "type": "string" },
+              "code": { "type": "string" }
+            }
+          }
+        }
+      }
+    }
+  },
+  "paths": {
+    "/healthz": {
+      "get": {
+        "summary": "Liveness",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/readyz": {
+      "get": {
+        "summary": "Readiness (db + redis)",
+        "responses": {
+          "200": { "description": "Ready" },
+          "503": { "description": "Not ready" }
+        }
+      }
+    },
+    "/v1/auth/signup": {
+      "post": {
+        "summary": "Sign up",
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": {
+                "type": "object",
+                "required": ["name", "phone", "password"],
+                "properties": {
+                  "name": { "type": "string" },
+                  "phone": { "type": "string" },
+                  "password": { "type": "string" }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "201": {
+            "description": "Created",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TokenPair" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/login": {
+      "post": {
+        "summary": "Log in",
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/TokenPair" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/auth/refresh": {
+      "post": {
+        "summary": "Rotate refresh token",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/v1/auth/logout": {
+      "post": {
+        "summary": "Revoke refresh family",
+        "responses": { "204": { "description": "No content" } }
+      }
+    },
+    "/v1/me": {
+      "get": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Current user",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/v1/me/onboarding": {
+      "put": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Complete / update onboarding",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/v1/me/photos/presign": {
+      "post": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Presign photo upload",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/v1/me/photos/confirm": {
+      "post": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Confirm photo upload",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/v1/drives": {
+      "get": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "List drives (open board by default)",
+        "responses": { "200": { "description": "OK" } }
+      },
+      "post": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Post a drive",
+        "responses": { "201": { "description": "Created" } }
+      }
+    },
+    "/v1/drives/{id}": {
+      "get": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Drive detail (passenger contact privacy filtered)",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/v1/drives/{id}/applications": {
+      "get": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "List applicants (poster only)",
+        "responses": { "200": { "description": "OK" } }
+      },
+      "post": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Apply to drive",
+        "responses": { "201": { "description": "Created" } }
+      }
+    },
+    "/v1/drives/{id}/accept": {
+      "post": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Accept applicant (atomic)",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/v1/drives/{id}/unassign": {
+      "post": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Unassign and reopen",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/v1/drives/{id}/complete": {
+      "post": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Complete drive and create 10% balance",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/v1/drives/{id}/hide": {
+      "post": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Hide completed drive from public feed (poster)",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/v1/balances": {
+      "get": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "List balances for current user",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/v1/balances/{id}/settle": {
+      "post": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Poster marks balance settled",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/v1/profiles/{id}": {
+      "get": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Public driver profile",
+        "responses": { "200": { "description": "OK" } }
+      }
+    }
+  }
+}
