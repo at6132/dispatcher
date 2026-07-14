@@ -8,6 +8,7 @@ import {
   type ReactNode,
 } from 'react';
 
+import { logger } from '../debug/logger';
 import {
   authenticateAccount,
   clearSession,
@@ -51,8 +52,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         if (!alive) return;
         setUser(sessionUser);
         setStatus(sessionUser ? 'authenticated' : 'unauthenticated');
-      } catch {
+        logger.info('auth', 'provider.ready', {
+          status: sessionUser ? 'authenticated' : 'unauthenticated',
+          onboardingComplete: sessionUser?.onboardingComplete ?? null,
+        });
+      } catch (err) {
         if (!alive) return;
+        logger.error('auth', 'provider.bootstrap_failed', {
+          err: err instanceof Error ? err.message : String(err),
+        });
         setUser(null);
         setStatus('unauthenticated');
       }
@@ -69,6 +77,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     setUser(next);
     setStatus('authenticated');
+    logger.info('auth', 'signed_in', {
+      userId: next.id,
+      onboardingComplete: next.onboardingComplete,
+    });
   }, []);
 
   const signUp = useCallback(async (input: SignUpInput) => {
@@ -79,13 +91,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     });
     setUser(next);
     setStatus('authenticated');
+    logger.info('auth', 'signed_up', {
+      userId: next.id,
+      onboardingComplete: next.onboardingComplete,
+    });
   }, []);
 
   const completeOnboarding = useCallback(
     async (input: OnboardingInput) => {
       if (!user) throw new Error('Not signed in.');
+      logger.info('auth', 'complete_onboarding.start', { userId: user.id });
       const next = await saveOnboarding(user.phone, input);
       setUser(next);
+      logger.info('auth', 'complete_onboarding.done', {
+        userId: next.id,
+        onboardingComplete: next.onboardingComplete,
+      });
     },
     [user],
   );
@@ -94,6 +115,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     await clearSession();
     setUser(null);
     setStatus('unauthenticated');
+    logger.info('auth', 'signed_out');
   }, []);
 
   const value = useMemo(

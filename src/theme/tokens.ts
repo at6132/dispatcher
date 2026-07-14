@@ -1,27 +1,40 @@
 /**
- * Dispatcher design profile — liquid glass, low-profile minimal.
- * No logo chrome. Quiet, easy, low texture.
+ * Dispatcher — mid dusk + atmospheric fog.
+ * Cormorant Garamond display + DM Sans UI.
  */
 
+export const fonts = {
+  display: 'CormorantGaramond_500Medium',
+  displayItalic: 'CormorantGaramond_500Medium_Italic',
+  sans: 'DMSans_400Regular',
+  sansMedium: 'DMSans_500Medium',
+  sansSemi: 'DMSans_600SemiBold',
+} as const;
+
 export const colors = {
-  // Cool mist canvas — not cream, not purple
-  canvas: '#EEF1F5',
-  canvasDeep: '#E4E9F0',
-  ink: '#1C2128',
-  inkSoft: '#3D4550',
-  muted: '#6B7380',
-  faint: '#9AA3AF',
-  // Quiet steel accent — never indigo/violet
-  accent: '#3E5A6B',
-  accentSoft: 'rgba(62, 90, 107, 0.12)',
-  // Glass layers
-  glass: 'rgba(255, 255, 255, 0.52)',
-  glassStrong: 'rgba(255, 255, 255, 0.72)',
-  glassBorder: 'rgba(255, 255, 255, 0.7)',
-  glassEdge: 'rgba(28, 33, 40, 0.06)',
-  hairline: 'rgba(28, 33, 40, 0.08)',
-  danger: '#B54A4A',
-  success: '#3D6B55',
+  canvas: '#252B33',
+  canvasDeep: '#1B2026',
+  canvasLift: '#323942',
+  fog: 'rgba(140, 165, 182, 0.22)',
+  fogSoft: 'rgba(180, 200, 214, 0.1)',
+  ink: '#EEF1F4',
+  inkSoft: '#C8CFD7',
+  muted: '#9199A4',
+  faint: '#6E7682',
+  accent: '#B0C2CC',
+  accentSoft: 'rgba(176, 194, 204, 0.18)',
+  accentMuted: 'rgba(176, 194, 204, 0.12)',
+  onAccent: '#1A1F25',
+  glass: 'rgba(255, 255, 255, 0.08)',
+  glassStrong: 'rgba(255, 255, 255, 0.12)',
+  glassHighlight: 'rgba(255, 255, 255, 0.22)',
+  glassBorder: 'rgba(255, 255, 255, 0.16)',
+  glassEdge: 'rgba(0, 0, 0, 0.28)',
+  hairline: 'rgba(238, 241, 244, 0.14)',
+  field: 'rgba(12, 16, 22, 0.32)',
+  fieldFocus: 'rgba(12, 16, 22, 0.45)',
+  danger: '#D08A8A',
+  success: '#7FA894',
 } as const;
 
 export const space = {
@@ -32,82 +45,100 @@ export const space = {
   xl: 24,
   xxl: 32,
   xxxl: 48,
+  hero: 56,
 } as const;
 
 export const radius = {
-  sm: 10,
-  md: 14,
-  lg: 18,
-  xl: 24,
-  // Controls stay rounded, never pill-cluster heavy
-  control: 12,
+  sm: 12,
+  md: 16,
+  lg: 22,
+  xl: 28,
+  control: 16,
 } as const;
 
 export const type = {
+  hero: {
+    fontFamily: fonts.display,
+    fontSize: 44,
+    letterSpacing: -0.8,
+    lineHeight: 50,
+  },
+  heroItalic: {
+    fontFamily: fonts.displayItalic,
+    fontSize: 44,
+    letterSpacing: -0.8,
+    lineHeight: 50,
+  },
   display: {
-    fontSize: 28,
-    fontWeight: '600' as const,
-    letterSpacing: -0.4,
-    lineHeight: 34,
+    fontFamily: fonts.display,
+    fontSize: 36,
+    letterSpacing: -0.6,
+    lineHeight: 42,
   },
   title: {
+    fontFamily: fonts.sansSemi,
     fontSize: 20,
-    fontWeight: '600' as const,
-    letterSpacing: -0.2,
+    letterSpacing: -0.3,
     lineHeight: 26,
   },
   body: {
+    fontFamily: fonts.sans,
     fontSize: 16,
-    fontWeight: '400' as const,
-    letterSpacing: 0,
+    letterSpacing: -0.15,
     lineHeight: 24,
   },
+  bodyLarge: {
+    fontFamily: fonts.sans,
+    fontSize: 17,
+    letterSpacing: -0.2,
+    lineHeight: 26,
+  },
   caption: {
+    fontFamily: fonts.sans,
     fontSize: 13,
-    fontWeight: '400' as const,
     letterSpacing: 0.1,
     lineHeight: 18,
   },
   label: {
-    fontSize: 14,
-    fontWeight: '500' as const,
-    letterSpacing: 0.1,
-    lineHeight: 20,
+    fontFamily: fonts.sansMedium,
+    fontSize: 12,
+    letterSpacing: 0.4,
+    lineHeight: 16,
   },
 } as const;
 
-/** Soft lift only — no multi-layer glow stacks */
 export const elevation = {
   glass: {
-    shadowColor: '#1C2128',
-    shadowOffset: { width: 0, height: 8 },
-    shadowOpacity: 0.06,
-    shadowRadius: 24,
-    elevation: 3,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 18 },
+    shadowOpacity: 0.35,
+    shadowRadius: 40,
+    elevation: 8,
   },
   whisper: {
-    shadowColor: '#1C2128',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 8,
-    elevation: 1,
+    shadowColor: '#000000',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.22,
+    shadowRadius: 16,
+    elevation: 3,
   },
 } as const;
 
 export const blur = {
-  /** Liquid glass panels / bars */
-  glass: 42,
-  sheet: 58,
-  tint: 'systemUltraThinMaterialLight' as const,
+  glass: 55,
+  sheet: 72,
+  tint: 'systemChromeMaterialDark' as const,
 } as const;
 
 export const motion = {
-  pressScale: 0.98,
+  pressScale: 0.985,
   durationFast: 160,
   duration: 240,
+  durationSlow: 420,
 } as const;
 
 export const theme = {
+  fonts,
   colors,
   space,
   radius,

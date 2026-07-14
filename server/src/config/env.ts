@@ -21,10 +21,28 @@ const envSchema = z.object({
     .transform((v) => v === 'true' || v === '1'),
   PUBLIC_API_URL: z.string().url().optional(),
   TZ: z.string().default('America/New_York'),
+  /** override pino level: debug | info | warn | error */
+  LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error']).optional(),
+  /** Log redacted request body summaries (off by default in production) */
+  LOG_REQUEST_BODIES: z
+    .string()
+    .optional()
+    .transform((v) => v === 'true' || v === '1'),
+  /**
+   * Bot token from @BotFather.
+   * TELEGRAM_BOT_ID is accepted as an alias (some envs used that name).
+   */
+  TELEGRAM_BOT_TOKEN: z.string().min(10).optional(),
+  TELEGRAM_BOT_ID: z.string().min(10).optional(),
+  /** Comma/space-separated Telegram chat IDs to notify */
+  TELEGRAM_CHAT_IDS: z.string().optional(),
+  /** Min HTTP status that triggers a text (default 500; set 400 to include client errors) */
+  TELEGRAM_ALERT_MIN_STATUS: z.coerce.number().int().default(500),
 });
 
 export type Env = z.infer<typeof envSchema> & {
   s3Enabled: boolean;
+  telegramEnabled: boolean;
 };
 
 function loadEnv(): Env {
@@ -42,7 +60,13 @@ function loadEnv(): Env {
       data.S3_ACCESS_KEY_ID &&
       data.S3_SECRET_ACCESS_KEY,
   );
-  return { ...data, s3Enabled };
+  const token = data.TELEGRAM_BOT_TOKEN || data.TELEGRAM_BOT_ID;
+  const chats = (data.TELEGRAM_CHAT_IDS ?? '')
+    .split(/[,\s]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  const telegramEnabled = Boolean(token && chats.length > 0);
+  return { ...data, s3Enabled, telegramEnabled };
 }
 
 export const env = loadEnv();

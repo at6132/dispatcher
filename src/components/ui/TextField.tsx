@@ -9,13 +9,11 @@ import {
   type TextInput as TextInputRef,
 } from 'react-native';
 
-import { colors, radius, space, type } from '../../theme';
+import { colors, fonts, radius, space, type } from '../../theme';
 
 type TextFieldProps = TextInputProps & {
   label: string;
   error?: string;
-  hint?: string;
-  /** Trailing control (e.g. show/hide password) */
   trailing?: ReactNode;
 };
 
@@ -24,7 +22,6 @@ export const TextField = forwardRef<TextInputRef, TextFieldProps>(
     {
       label,
       error,
-      hint,
       trailing,
       editable = true,
       onFocus,
@@ -38,48 +35,45 @@ export const TextField = forwardRef<TextInputRef, TextFieldProps>(
 
     return (
       <View style={styles.wrap}>
-        <Text style={styles.label} accessibilityRole="text">
-          {label}
-        </Text>
         <View
           style={[
             styles.field,
             focused && styles.fieldFocused,
             !!error && styles.fieldError,
-            !editable && styles.fieldDisabled,
+            !editable && styles.disabled,
           ]}
         >
-          <TextInput
-            ref={ref}
-            editable={editable}
-            placeholderTextColor={colors.faint}
-            selectionColor={colors.accent}
-            accessibilityLabel={label}
-            style={[styles.input, style]}
-            onFocus={(e) => {
-              setFocused(true);
-              onFocus?.(e);
-            }}
-            onBlur={(e) => {
-              setFocused(false);
-              onBlur?.(e);
-            }}
-            {...rest}
-          />
+          <View style={styles.inner}>
+            <Text style={[styles.label, focused && styles.labelFocused]}>
+              {label}
+            </Text>
+            <TextInput
+              ref={ref}
+              editable={editable}
+              placeholderTextColor={colors.faint}
+              selectionColor={colors.accent}
+              accessibilityLabel={label}
+              style={[styles.input, style]}
+              onFocus={(e) => {
+                setFocused(true);
+                onFocus?.(e);
+              }}
+              onBlur={(e) => {
+                setFocused(false);
+                onBlur?.(e);
+              }}
+              {...rest}
+            />
+          </View>
           {trailing ? <View style={styles.trailing}>{trailing}</View> : null}
         </View>
         {error ? (
           <Text
-            nativeID={`${label}-error`}
             style={styles.error}
             accessibilityLiveRegion="polite"
             accessibilityRole="alert"
           >
             {error}
-          </Text>
-        ) : hint ? (
-          <Text nativeID={`${label}-hint`} style={styles.hint}>
-            {hint}
           </Text>
         ) : null}
       </View>
@@ -100,7 +94,7 @@ export function PasswordVisibilityToggle({
     <Pressable
       accessibilityRole="button"
       accessibilityLabel={visible ? 'Hide password' : 'Show password'}
-      hitSlop={8}
+      hitSlop={10}
       onPress={onToggle}
       style={styles.toggle}
     >
@@ -113,54 +107,62 @@ const styles = StyleSheet.create({
   wrap: {
     gap: space.sm,
   },
-  label: {
-    ...type.label,
-    color: colors.inkSoft,
-  },
   field: {
-    minHeight: 52,
+    minHeight: 64,
     flexDirection: 'row',
     alignItems: 'center',
     borderRadius: radius.control,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.hairline,
-    backgroundColor: 'rgba(255, 255, 255, 0.62)',
+    backgroundColor: colors.field,
     paddingHorizontal: space.lg,
+    paddingVertical: space.sm,
   },
   fieldFocused: {
-    borderColor: colors.accent,
-    backgroundColor: colors.glassStrong,
+    borderColor: colors.glassHighlight,
+    backgroundColor: colors.fieldFocus,
   },
   fieldError: {
     borderColor: colors.danger,
   },
-  fieldDisabled: {
+  disabled: {
     opacity: 0.55,
   },
-  input: {
+  inner: {
     flex: 1,
+    gap: 2,
+    justifyContent: 'center',
+  },
+  label: {
+    ...type.label,
+    color: colors.muted,
+    textTransform: 'uppercase',
+  },
+  labelFocused: {
+    color: colors.accent,
+  },
+  input: {
     ...type.body,
     color: colors.ink,
-    paddingVertical: space.md,
+    paddingVertical: 0,
+    margin: 0,
   },
   trailing: {
     marginLeft: space.sm,
+    alignSelf: 'center',
   },
   toggle: {
     paddingVertical: space.xs,
     paddingHorizontal: space.xs,
   },
   toggleLabel: {
-    ...type.caption,
-    fontWeight: '500',
+    fontFamily: fonts.sansMedium,
+    fontSize: 13,
     color: colors.accent,
   },
   error: {
     ...type.caption,
     color: colors.danger,
-  },
-  hint: {
-    ...type.caption,
-    color: colors.muted,
+    paddingLeft: space.sm,
   },
 });

@@ -1,7 +1,5 @@
 import type { AuthMode, FieldErrors } from './types';
 
-export type PasswordStrength = 'empty' | 'weak' | 'okay' | 'strong';
-
 /** Digits only — strip spaces, dashes, parens, leading +. */
 export function digitsOnly(value: string): string {
   return value.replace(/\D/g, '');
@@ -47,7 +45,6 @@ export function validatePhone(value: string): string | undefined {
   if (!digits) return 'Enter your phone number';
   if (digits.length < 10) return 'Enter a valid phone number';
   if (digits.length > 15) return 'Phone number is too long';
-  // Reject obvious junk like all zeros
   if (/^0+$/.test(digits)) return 'Enter a valid phone number';
   return undefined;
 }
@@ -60,13 +57,56 @@ export function validateName(value: string): string | undefined {
   return undefined;
 }
 
+export type PasswordRequirement = {
+  id: 'length' | 'letter' | 'number';
+  label: string;
+  met: boolean;
+};
+
+export function getPasswordRequirements(value: string): PasswordRequirement[] {
+  return [
+    {
+      id: 'length',
+      label: 'At least 8 characters',
+      met: value.length >= 8,
+    },
+    {
+      id: 'letter',
+      label: 'At least one letter',
+      met: /[A-Za-z]/.test(value),
+    },
+    {
+      id: 'number',
+      label: 'At least one number',
+      met: /[0-9]/.test(value),
+    },
+  ];
+}
+
+export function passwordMeetsRequirements(value: string): boolean {
+  return (
+    value.length > 0 &&
+    value.length <= 128 &&
+    getPasswordRequirements(value).every((r) => r.met)
+  );
+}
+
+export type ConfirmMatchState = 'idle' | 'match' | 'mismatch';
+
+export function getConfirmMatchState(
+  password: string,
+  confirm: string,
+): ConfirmMatchState {
+  if (!confirm) return 'idle';
+  return confirm === password ? 'match' : 'mismatch';
+}
+
 /** Signup passwords — clear bar, no cryptic policy dump. */
 export function validateNewPassword(value: string): string | undefined {
   if (!value) return 'Choose a password';
-  if (value.length < 8) return 'Use at least 8 characters';
   if (value.length > 128) return 'Password is too long';
-  if (!/[A-Za-z]/.test(value)) return 'Include at least one letter';
-  if (!/[0-9]/.test(value)) return 'Include at least one number';
+  const unmet = getPasswordRequirements(value).find((r) => !r.met);
+  if (unmet) return unmet.label;
   return undefined;
 }
 
@@ -82,21 +122,6 @@ export function validateConfirmPassword(
   if (!confirm) return 'Confirm your password';
   if (confirm !== password) return 'Passwords do not match';
   return undefined;
-}
-
-export function passwordStrength(value: string): PasswordStrength {
-  if (!value) return 'empty';
-
-  let score = 0;
-  if (value.length >= 8) score += 1;
-  if (value.length >= 12) score += 1;
-  if (/[A-Z]/.test(value) && /[a-z]/.test(value)) score += 1;
-  if (/[0-9]/.test(value)) score += 1;
-  if (/[^A-Za-z0-9]/.test(value)) score += 1;
-
-  if (score <= 2) return 'weak';
-  if (score <= 3) return 'okay';
-  return 'strong';
 }
 
 export type AuthFormValues = {

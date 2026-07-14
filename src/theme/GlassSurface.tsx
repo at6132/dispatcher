@@ -1,4 +1,5 @@
 import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import type { ReactNode } from 'react';
 import {
   Platform,
@@ -14,42 +15,50 @@ import { blur, colors, elevation, radius } from './tokens';
 type GlassSurfaceProps = ViewProps & {
   children?: ReactNode;
   style?: StyleProp<ViewStyle>;
-  /** Soft translucent fill without blur — use under lists or when blur isn’t available */
+  contentStyle?: StyleProp<ViewStyle>;
+  /** Soft translucent fill without blur */
   flat?: boolean;
   intensity?: number;
 };
 
 /**
- * Low-texture liquid glass panel.
- * Prefer for chrome (bars, sheets, floating controls) — not every content block.
+ * Liquid glass panel — frosted sheet for auth, bars, modals.
  */
 export function GlassSurface({
   children,
   style,
+  contentStyle,
   flat = false,
   intensity = blur.glass,
   ...rest
 }: GlassSurfaceProps) {
-  if (flat || Platform.OS === 'web') {
-    return (
-      <View style={[styles.base, styles.flat, style]} {...rest}>
-        {children}
-      </View>
-    );
-  }
+  const useFlat = flat || Platform.OS === 'web';
 
   return (
     <View style={[styles.base, elevation.glass, style]} {...rest}>
-      <BlurView
-        intensity={intensity}
-        tint={blur.tint}
-        style={StyleSheet.absoluteFill}
-        {...(Platform.OS === 'android'
-          ? { experimentalBlurMethod: 'dimezisBlurView' as const }
-          : null)}
-      />
+      {useFlat ? (
+        <View style={[StyleSheet.absoluteFill, styles.flatFill]} />
+      ) : (
+        <BlurView
+          intensity={intensity}
+          tint={blur.tint}
+          style={StyleSheet.absoluteFill}
+          {...(Platform.OS === 'android'
+            ? { experimentalBlurMethod: 'dimezisBlurView' as const }
+            : null)}
+        />
+      )}
+
       <View style={styles.glassWash} pointerEvents="none" />
-      <View style={styles.content}>{children}</View>
+      <LinearGradient
+        colors={[colors.glassHighlight, 'transparent', 'rgba(0,0,0,0.12)']}
+        locations={[0, 0.35, 1]}
+        start={{ x: 0.5, y: 0 }}
+        end={{ x: 0.5, y: 1 }}
+        style={styles.sheen}
+        pointerEvents="none"
+      />
+      <View style={[styles.content, contentStyle]}>{children}</View>
     </View>
   );
 }
@@ -57,18 +66,19 @@ export function GlassSurface({
 const styles = StyleSheet.create({
   base: {
     overflow: 'hidden',
-    borderRadius: radius.lg,
+    borderRadius: radius.xl,
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.glassBorder,
   },
-  flat: {
+  flatFill: {
     backgroundColor: colors.glassStrong,
-    borderColor: colors.glassEdge,
-    ...elevation.whisper,
   },
   glassWash: {
     ...StyleSheet.absoluteFillObject,
     backgroundColor: colors.glass,
+  },
+  sheen: {
+    ...StyleSheet.absoluteFillObject,
   },
   content: {
     zIndex: 1,

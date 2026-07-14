@@ -10,9 +10,9 @@ import {
   type ViewStyle,
 } from 'react-native';
 
-import { colors, motion, radius, space, type } from '../../theme';
+import { colors, elevation, fonts, motion, radius, space, type } from '../../theme';
 
-type ButtonVariant = 'primary' | 'ghost';
+type ButtonVariant = 'primary' | 'ghost' | 'quiet';
 
 type ButtonProps = Omit<PressableProps, 'children' | 'style'> & {
   children: ReactNode;
@@ -43,13 +43,15 @@ export function Button({
   };
 
   return (
-    <Animated.View style={{ transform: [{ scale }] }}>
+    <Animated.View style={[{ transform: [{ scale }] }, variant === 'primary' && elevation.whisper]}>
       <Pressable
         accessibilityRole="button"
         disabled={isDisabled}
         style={({ pressed }) => [
           styles.base,
-          variant === 'primary' ? styles.primary : styles.ghost,
+          variant === 'primary' && styles.primary,
+          variant === 'ghost' && styles.ghost,
+          variant === 'quiet' && styles.quiet,
           isDisabled && styles.disabled,
           pressed && !isDisabled && styles.pressed,
           style,
@@ -66,13 +68,15 @@ export function Button({
       >
         {loading ? (
           <ActivityIndicator
-            color={variant === 'primary' ? '#FFFFFF' : colors.accent}
+            color={variant === 'primary' ? colors.onAccent : colors.accent}
           />
         ) : (
           <Text
             style={[
               styles.label,
-              variant === 'primary' ? styles.primaryLabel : styles.ghostLabel,
+              variant === 'primary' && styles.primaryLabel,
+              variant === 'ghost' && styles.ghostLabel,
+              variant === 'quiet' && styles.quietLabel,
             ]}
           >
             {children}
@@ -85,7 +89,7 @@ export function Button({
 
 const styles = StyleSheet.create({
   base: {
-    minHeight: 52,
+    minHeight: 56,
     borderRadius: radius.control,
     alignItems: 'center',
     justifyContent: 'center',
@@ -93,9 +97,14 @@ const styles = StyleSheet.create({
   },
   primary: {
     backgroundColor: colors.accent,
+    borderRadius: radius.control,
   },
   ghost: {
     backgroundColor: 'transparent',
+  },
+  quiet: {
+    backgroundColor: colors.accentMuted,
+    borderRadius: radius.control,
   },
   pressed: {
     opacity: 0.92,
@@ -105,12 +114,17 @@ const styles = StyleSheet.create({
   },
   label: {
     ...type.label,
-    fontWeight: '600',
+    fontFamily: fonts.sansSemi,
+    fontSize: 15,
+    letterSpacing: -0.1,
   },
   primaryLabel: {
-    color: '#FFFFFF',
+    color: colors.onAccent,
   },
   ghostLabel: {
     color: colors.accent,
+  },
+  quietLabel: {
+    color: colors.inkSoft,
   },
 });

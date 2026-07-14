@@ -1,3 +1,4 @@
+import { logger } from '../debug/logger';
 import { apiFetch, getApiBaseUrl } from './client';
 
 type PresignResponse = {
@@ -32,21 +33,39 @@ export async function uploadLocalPhotoIfNeeded(
   if (uri.startsWith('http://') || uri.startsWith('https://')) return undefined;
   if (!getApiBaseUrl()) return undefined;
 
+  logger.info('photos', 'upload.start', { kind });
   try {
     const contentType = guessContentType(uri);
     const presign = await apiFetch<PresignResponse>('/v1/me/photos/presign', {
       method: 'POST',
       body: JSON.stringify({ kind, contentType }),
     });
+    logger.debug('photos', 'presign.ok', {
+      kind,
+      uploadId: presign.uploadId,
+    });
 
     const fileRes = await fetch(uri);
     const blob = await fileRes.blob();
-    const put = await fetch(presign.uploadUrl, {
-      method: 'PUT',
-      headers: { 'Content-Type': contentType },
-      body: blob,
-    });
+    let put: Response;
+    try {
+      put = await fetch(presign.uploadUrl, {
+        method: 'PUT',
+        headers: { 'Content-Type': contentType },
+        body: blob,
+      });
+    } catch (err) {
+      logger.warn('photos', 's3_put.network_error', {
+        kind,
+        err: err instanceof Error ? err.message : String(err),
+      });
+      throw new Error('Photo upload failed');
+    }
     if (!put.ok) {
+      logger.warn('photos', 's3_put.http_error', {
+        kind,
+        status: put.status,
+      });
       throw new Error('Photo upload failed');
     }
 
@@ -54,11 +73,21 @@ export async function uploadLocalPhotoIfNeeded(
       method: 'POST',
       body: JSON.stringify({ uploadId: presign.uploadId }),
     });
+    logger.info('photos', 'upload.ok', {
+      kind,
+      objectKey: confirmed.objectKey,
+    });
     return confirmed.objectKey;
   } catch (err) {
-    const code = (err as { code?: string }).code;
-    // Allow onboarding without photos if storage isn't configured yet
-    if (code === 's3_disabled') return undefined;
-    throw err;
+    // Photos are optional — never block onboarding if upload fails
+    const code = (err as { code?: string; requestId?: string }).code;
+    const requestId = (err as { requestId?: string }).requestId;
+    logger.warn('photos', 'upload.skipped', {
+      kind,
+      code,
+      requestId,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    return undefined;
   }
 }

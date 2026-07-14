@@ -1,28 +1,72 @@
 ---
-description: Dispatcher design profile — liquid glass, low-profile minimal UI
+description: Dispatcher design profile — mid dusk liquid glass, final product UI
 alwaysApply: true
 ---
 
 # Design profile
 
-Quiet liquid glass. Low profile. Low texture. Minimal. Easy.
+Quiet liquid glass on **mid dusk**. Low profile. Low texture. Minimal. Easy.
+
+Shipping stack: Expo SDK 54, React Native, tokens + surfaces in `src/theme`.
+
+## Atmosphere
+
+- Single mode only — no light/dark toggle
+- Canvas `#252B33`, deeper `#1B2026`, lift `#323942`
+- Soft ink `#EEF1F4`, muted `#9199A4`, faint `#6E7682`
+- Quiet steel accent `#B0C2CC` (muted fills via `accentSoft` / `accentMuted`)
+- Screen backdrop: `MistBackdrop` (atmospheric fog washes) — not a flat void
+- Forms sit **on** the mist — do not wrap auth / onboarding forms in glass cards
+
+## Typography
+
+- Display / hero: **Cormorant Garamond** (`fonts.display` / `displayItalic`)
+- UI: **DM Sans** (`sans` / `sansMedium` / `sansSemi`)
+- Onboarding / auth page titles: split lead + italic trail (`type.hero` + `type.heroItalic`), e.g. “Add” + “*photos*”
+- Uppercase micro-labels use `type.label` + muted color
+- Never default to Inter / system stacks for headlines
+
+## Chrome & controls
+
+- Tokens only from `src/theme` — never invent brand colors
+- Glass via `GlassSurface` / `expo-blur` for **bars, sheets, modals, key listing surfaces** — hairline borders, soft wash, whisper shadow
+- Fields: `colors.field` / `fieldFocus`, radius `control` / `lg`, hairline borders
+- Primary CTA obvious; secondary / skip / back quieter (`Button` variants `primary` | `ghost` | `quiet`)
+- Progress: thin hairline dots, accent when active — not pill clusters
+
+## Icons
+
+- Pack: **Lucide** (`lucide-react-native` + `react-native-svg`)
+- Always render via `Icon` (`src/components/ui/Icon`) — sizes/`iconStroke` from `src/theme/icons`
+- Quiet stroke (~1.75); active nav can nudge to 2. Prefer outline glyphs over filled
+- Canonical nav glyphs: `Home`, center `Plus`, `Landmark` (Bank). Import named icons from Lucide; don’t mix icon libraries
+
+## Product patterns (keep consistent)
+
+- **Bottom nav** (`BottomNav`): floating glass pill dock — **Home** · massive steel **+** · **Bank**. Not edge-to-edge. Center FAB bulges above the bar; tabs use Lucide + uppercase micro-labels. Glass chrome over mist
+- **Main shell** (`MainShell`): Home / Bank tabs with local state + demo data until API is wired
+- **Home**: split hero (“Near” + “*you*”), your listing + nearby `DriverCard`s (`showMap={false}`), clear space for floating dock
+- **Driver listing** (`DriverCard`): what dispatchers see — PFP avatar, `Name · VehicleType` same size on one line, phone, seats/years detail, optional exterior/interior thumbs. Home preview uses `showMap={false}`
+- **Photos step**: circular PFP for “You”; rectangular pickers for vehicle interior / exterior (max one each). Shared pick queue — don’t block sibling slots
+- **Location step**: permission only — no driver-card preview on that screen. Expo Go maxes at While Using; Always needs a native build
+- **You’re in**: driver card + “Need to make changes? Go to Settings.” — no map chrome there
+- Dismiss keyboard on empty taps / continue / back during forms
 
 ## Do
 
-- Calm cool mist canvas (`#EEF1F5`), soft ink (`#1C2128`), quiet steel accent (`#3E5A6B`)
-- Glass chrome via `GlassSurface` / `expo-blur` — hairline borders, soft wash, whisper shadow
-- One purpose per screen; generous spacing (`space` tokens); clear hierarchy
-- Primary actions obvious; secondary actions visually quieter
-- Use tokens from `src/theme` — never hardcode random brand colors
+- One purpose per screen; generous `space` tokens; clear hierarchy
+- Soft press (`motion.pressScale` ~0.985), short ease (~160–240ms)
+- Success / danger from tokens (`success`, `danger`) — quiet, not neon
 
 ## Don’t
 
 - No logo / wordmark chrome in-app UI
-- No “AI product” look: purple/indigo gradients, neon glow, dark cosmic themes, pill clusters, emoji flourishes, multi-layer shadows
+- No “AI product” look: purple/indigo gradients, neon glow, pitch-black cosmic themes, pill clusters, emoji flourishes, multi-layer shadows
 - No warm cream + terracotta + serif newspaper layouts
-- No busy textures, gradients as decoration, inset media cards, floating badges on media
-- Don’t card-wrap everything — glass only for bars, sheets, modals, key surfaces
+- No busy textures, gradients as decoration, inset media hero cards, floating badges on media
+- Don’t card-wrap everything — reserve glass for intentional surfaces
+- Don’t dual-theme
 
 ## Motion
 
-Soft press (`scale ~0.98`), short ease (~160–240ms). Presence, not noise.
+Soft press, short ease. Presence, not noise.

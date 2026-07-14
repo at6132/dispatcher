@@ -1,4 +1,4 @@
-import type { FastifyRequest } from 'fastify';
+import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { eq } from 'drizzle-orm';
 
@@ -6,6 +6,7 @@ import { db } from '../db/client.js';
 import { users } from '../db/schema.js';
 import { verifyAccessToken } from '../lib/crypto.js';
 import { AppError } from '../lib/errors.js';
+import { assertRateLimit } from '../lib/security.js';
 
 export type AuthUser = {
   id: string;
@@ -29,16 +30,21 @@ function isAllowedWhileLocked(request: FastifyRequest): boolean {
   if (method === 'GET' && (path === '/v1/balances' || path === '/v1/balances/')) {
     return true;
   }
-  // Logout is on /v1/auth and does not use requireAuth
   return false;
 }
 
-export async function requireAuth(request: FastifyRequest): Promise<void> {
+export async function requireAuth(
+  request: FastifyRequest,
+  reply: FastifyReply,
+): Promise<void> {
   const header = request.headers.authorization;
   if (!header?.startsWith('Bearer ')) {
     throw new AppError(401, 'Unauthorized', 'unauthorized');
   }
   const token = header.slice('Bearer '.length).trim();
+  if (token.length > 4096) {
+    throw new AppError(401, 'Unauthorized', 'unauthorized');
+  }
   const claims = await verifyAccessToken(token);
   if (!claims) {
     throw new AppError(401, 'Unauthorized', 'unauthorized');
@@ -58,6 +64,26 @@ export async function requireAuth(request: FastifyRequest): Promise<void> {
     status: user.status,
     onboardingComplete: user.onboardingComplete,
   };
+
+  // Per authenticated user + IP ceiling (Redis sliding window)
+  await assertRateLimit(
+    {
+      key: `authed:user:${user.id}`,
+      limit: 240,
+      windowSec: 60,
+      failClosed: false,
+    },
+    reply,
+  );
+  await assertRateLimit(
+    {
+      key: `authed:ip:${request.ip}`,
+      limit: 360,
+      windowSec: 60,
+      failClosed: false,
+    },
+    reply,
+  );
 
   if (user.status === 'locked' && !isAllowedWhileLocked(request)) {
     throw new AppError(

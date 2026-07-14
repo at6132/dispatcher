@@ -5,7 +5,8 @@ import { and, eq } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { idempotencyKeys } from '../db/schema.js';
 import { AppError, sendError } from '../lib/errors.js';
-import { rateLimit } from '../lib/redis.js';
+import { logDomain, logDomainWarn, shortId } from '../lib/log.js';
+import { assertClientLimits, requireJsonContentType } from '../lib/security.js';
 import { requireAuth, requireUser } from '../middleware/auth.js';
 import {
   acceptApplication,
@@ -91,29 +92,30 @@ async function withIdempotency(
 
 export const driveRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', requireAuth);
+  app.addHook('preHandler', async (request) => {
+    requireJsonContentType(request);
+  });
 
   app.post('/', async (request, reply) => {
     const body = z
       .object({
-        routeText: z.string(),
-        passengerPhone: z.string(),
-        address: z.string().optional(),
-        fromPlace: z.string().optional(),
-        toPlace: z.string().optional(),
+        routeText: z.string().min(1).max(2000),
+        passengerPhone: z.string().min(5).max(32),
+        address: z.string().max(500).optional(),
+        fromPlace: z.string().max(200).optional(),
+        toPlace: z.string().max(200).optional(),
       })
       .safeParse(request.body);
     if (!body.success) return sendError(reply, 400, 'Invalid body', 'invalid_body');
     try {
       const user = requireUser(request);
-      const wait = await rateLimit({
-        key: `drive_create:${user.id}`,
-        limit: 30,
+      await assertClientLimits(request, reply, {
+        name: 'drive_create',
+        ipLimit: 40,
+        userLimit: 30,
         windowSec: 3600,
+        failClosed: true,
       });
-      if (wait) {
-        reply.header('Retry-After', Math.ceil(wait / 1000));
-        return sendError(reply, 429, 'Too many posts', 'rate_limited');
-      }
       const result = await withIdempotency(
         user.id,
         request as never,
@@ -123,9 +125,18 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
           return { status: 201, body: { drive } };
         },
       );
+      logDomain(request.log, 'drives.create.ok', {
+        requestId: request.id,
+        userId: shortId(user.id),
+        status: result.status,
+      });
       return reply.status(result.status).send(result.body);
     } catch (err) {
       if (err instanceof AppError) {
+        logDomainWarn(request.log, 'drives.create.fail', {
+          requestId: request.id,
+          code: err.code,
+        });
         return sendError(reply, err.statusCode, err.message, err.code);
       }
       throw err;
@@ -187,16 +198,19 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
     }
     try {
       const user = requireUser(request);
-      const wait = await rateLimit({
-        key: `apply:${user.id}`,
-        limit: 60,
+      await assertClientLimits(request, reply, {
+        name: 'drive_apply',
+        ipLimit: 90,
+        userLimit: 60,
         windowSec: 3600,
+        failClosed: true,
       });
-      if (wait) {
-        reply.header('Retry-After', Math.ceil(wait / 1000));
-        return sendError(reply, 429, 'Too many applies', 'rate_limited');
-      }
       const appRow = await applyToDrive(user.id, params.data.id, body.data);
+      logDomain(request.log, 'drives.apply.ok', {
+        requestId: request.id,
+        userId: shortId(user.id),
+        driveId: shortId(params.data.id),
+      });
       return reply.status(201).send({
         application: {
           id: appRow!.id,
@@ -238,6 +252,13 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
     }
     try {
       const user = requireUser(request);
+      await assertClientLimits(request, reply, {
+        name: 'drive_accept',
+        ipLimit: 60,
+        userLimit: 40,
+        windowSec: 3600,
+        failClosed: true,
+      });
       const result = await withIdempotency(
         user.id,
         request as never,
@@ -251,9 +272,18 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
           return { status: 200, body: { drive } };
         },
       );
+      logDomain(request.log, 'drives.accept.ok', {
+        requestId: request.id,
+        userId: shortId(user.id),
+        driveId: shortId(params.data.id),
+      });
       return reply.status(result.status).send(result.body);
     } catch (err) {
       if (err instanceof AppError) {
+        logDomainWarn(request.log, 'drives.accept.fail', {
+          requestId: request.id,
+          code: err.code,
+        });
         return sendError(reply, err.statusCode, err.message, err.code);
       }
       throw err;
@@ -290,6 +320,13 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
     }
     try {
       const user = requireUser(request);
+      await assertClientLimits(request, reply, {
+        name: 'drive_complete',
+        ipLimit: 40,
+        userLimit: 30,
+        windowSec: 3600,
+        failClosed: true,
+      });
       const result = await withIdempotency(
         user.id,
         request as never,
@@ -299,9 +336,19 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
           return { status: 200, body: out };
         },
       );
+      logDomain(request.log, 'drives.complete.ok', {
+        requestId: request.id,
+        userId: shortId(user.id),
+        driveId: shortId(params.data.id),
+        costCents: body.data.costCents,
+      });
       return reply.status(result.status).send(result.body);
     } catch (err) {
       if (err instanceof AppError) {
+        logDomainWarn(request.log, 'drives.complete.fail', {
+          requestId: request.id,
+          code: err.code,
+        });
         return sendError(reply, err.statusCode, err.message, err.code);
       }
       throw err;
@@ -326,9 +373,18 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
 
 export const balanceRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', requireAuth);
+  app.addHook('preHandler', async (request) => {
+    requireJsonContentType(request);
+  });
 
   app.get('/', async (request, reply) => {
     try {
+      await assertClientLimits(request, reply, {
+        name: 'balances_list',
+        ipLimit: 120,
+        userLimit: 60,
+        windowSec: 60,
+      });
       const user = requireUser(request);
       const items = await listBalances(user.id);
       return reply.send({ items });
@@ -344,6 +400,13 @@ export const balanceRoutes: FastifyPluginAsync = async (app) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
     if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
     try {
+      await assertClientLimits(request, reply, {
+        name: 'balance_settle',
+        ipLimit: 40,
+        userLimit: 30,
+        windowSec: 3600,
+        failClosed: true,
+      });
       const user = requireUser(request);
       const balance = await settleBalance(user.id, params.data.id);
       return reply.send({
@@ -369,6 +432,12 @@ export const profileRoutes: FastifyPluginAsync = async (app) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
     if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
     try {
+      await assertClientLimits(request, reply, {
+        name: 'profile_get',
+        ipLimit: 120,
+        userLimit: 90,
+        windowSec: 60,
+      });
       const user = await toPublicProfile(params.data.id);
       return reply.send({ user });
     } catch (err) {
