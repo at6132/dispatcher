@@ -1,12 +1,3 @@
 [phases.setup]
 nixPkgs = ["nodejs_22", "python3"]
 aptPkgs = ["build-essential"]
-
-[phases.install]
-cmds = ["npm ci"]
-
-[phases.build]
-cmds = ["npm run build"]
-
-[start]
-cmd = "npm run db:migrate && npm start"
