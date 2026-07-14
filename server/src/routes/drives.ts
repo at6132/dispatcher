@@ -20,7 +20,7 @@ import {
   settleBalance,
   unassignDrive,
 } from '../services/drives.js';
-import { toAuthUser } from '../services/auth.js';
+import { toPublicProfile } from '../services/auth.js';
 
 async function withIdempotency(
   userId: string,
@@ -141,6 +141,7 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
           .optional()
           .transform((v) => v === '1' || v === 'true'),
         limit: z.coerce.number().int().optional(),
+        cursor: z.string().optional(),
       })
       .safeParse(request.query);
     if (!query.success) {
@@ -368,17 +369,8 @@ export const profileRoutes: FastifyPluginAsync = async (app) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
     if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
     try {
-      const user = await toAuthUser(params.data.id);
-      // public profile: strip status? keep onboarding for driver card
-      return reply.send({
-        user: {
-          id: user.id,
-          phone: user.phone,
-          name: user.name,
-          onboardingComplete: user.onboardingComplete,
-          onboarding: user.onboarding,
-        },
-      });
+      const user = await toPublicProfile(params.data.id);
+      return reply.send({ user });
     } catch (err) {
       if (err instanceof AppError) {
         return sendError(reply, err.statusCode, err.message, err.code);

@@ -12,7 +12,7 @@ import { AppError } from '../lib/errors.js';
 import { isUniqueViolation, withLock } from '../lib/locks.js';
 import { isValidPhone, nextSundayDeadlineNy, normalizePhone } from '../lib/phone.js';
 import { getRedis } from '../lib/redis.js';
-import { toAuthUser } from './auth.js';
+import { toAuthUser, toPublicProfile } from './auth.js';
 
 function canSeePassenger(drive: {
   posterId: string;
@@ -134,18 +134,30 @@ export async function listDrives(
   const conditions = [];
 
   if (query.completed) {
+    // Public completed feed (hidden excluded) — intentional product rule
     conditions.push(eq(drives.status, 'completed'));
     conditions.push(eq(drives.hiddenByPoster, false));
   } else if (query.status === 'open') {
     conditions.push(eq(drives.status, 'open'));
   } else if (query.status === 'assigned') {
+    // Only drives involving the viewer — prevent global assigned dump
     conditions.push(eq(drives.status, 'assigned'));
+    conditions.push(
+      sql`(${drives.posterId} = ${viewerId} OR ${drives.assigneeId} = ${viewerId})`,
+    );
   } else if (query.status === 'mine') {
     conditions.push(
       sql`(${drives.posterId} = ${viewerId} OR ${drives.assigneeId} = ${viewerId})`,
     );
   } else {
     conditions.push(eq(drives.status, 'open'));
+  }
+
+  if (query.cursor) {
+    const cursorDate = new Date(query.cursor);
+    if (!Number.isNaN(cursorDate.getTime())) {
+      conditions.push(sql`${drives.createdAt} < ${cursorDate}`);
+    }
   }
 
   const rows = await db
@@ -167,6 +179,19 @@ export async function listDrives(
 export async function getDrive(viewerId: string, driveId: string): Promise<DriveDto> {
   const [row] = await db.select().from(drives).where(eq(drives.id, driveId)).limit(1);
   if (!row) throw new AppError(404, 'Drive not found', 'drive_not_found');
+
+  const isParty = row.posterId === viewerId || row.assigneeId === viewerId;
+  // Open board is public to authenticated users; assigned/completed only to parties
+  // (completed also visible on public completed feed, but detail still party-or-completed)
+  if (row.status === 'open') {
+    return mapDrive(row, viewerId);
+  }
+  if (row.status === 'completed' && !row.hiddenByPoster) {
+    return mapDrive(row, viewerId);
+  }
+  if (!isParty) {
+    throw new AppError(404, 'Drive not found', 'drive_not_found');
+  }
   return mapDrive(row, viewerId);
 }
 
@@ -240,14 +265,18 @@ export async function listApplications(posterId: string, driveId: string) {
     .orderBy(desc(applications.createdAt));
 
   return Promise.all(
-    rows.map(async (r) => ({
-      id: r.application.id,
-      status: r.application.status,
-      lat: r.application.lat ? Number(r.application.lat) : undefined,
-      lng: r.application.lng ? Number(r.application.lng) : undefined,
-      createdAt: r.application.createdAt.toISOString(),
-      driver: await toAuthUser(r.user.id),
-    })),
+    rows.map(async (r) => {
+      const profile = await toPublicProfile(r.user.id);
+      return {
+        id: r.application.id,
+        status: r.application.status,
+        lat: r.application.lat ? Number(r.application.lat) : undefined,
+        lng: r.application.lng ? Number(r.application.lng) : undefined,
+        createdAt: r.application.createdAt.toISOString(),
+        // Poster-only context: driver phone is needed to coordinate after accept UX
+        driver: { ...profile, phone: r.user.phone },
+      };
+    }),
   );
 }
 

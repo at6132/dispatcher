@@ -60,28 +60,44 @@ export async function presignPut(input: {
   contentType: string;
 }): Promise<{ uploadUrl: string; expiresIn: number }> {
   const expiresIn = 600;
+  // Do not sign ContentLength as an exact size — clients upload real file sizes.
+  // Max size is enforced on confirm via HeadObject.
   const url = await getSignedUrl(
     getClient(),
     new PutObjectCommand({
       Bucket: env.S3_BUCKET,
       Key: input.key,
       ContentType: input.contentType,
-      ContentLength: MAX_BYTES,
     }),
     { expiresIn },
   );
   return { uploadUrl: url, expiresIn };
 }
 
-export async function objectExists(key: string): Promise<boolean> {
+export type ObjectMeta = {
+  exists: boolean;
+  contentLength?: number;
+  contentType?: string;
+};
+
+export async function headObject(key: string): Promise<ObjectMeta> {
   try {
-    await getClient().send(
+    const out = await getClient().send(
       new HeadObjectCommand({ Bucket: env.S3_BUCKET, Key: key }),
     );
-    return true;
+    return {
+      exists: true,
+      contentLength: out.ContentLength,
+      contentType: out.ContentType ?? undefined,
+    };
   } catch {
-    return false;
+    return { exists: false };
   }
+}
+
+export async function objectExists(key: string): Promise<boolean> {
+  const meta = await headObject(key);
+  return meta.exists;
 }
 
 export async function presignGet(key: string): Promise<string> {
@@ -90,11 +106,4 @@ export async function presignGet(key: string): Promise<string> {
     new GetObjectCommand({ Bucket: env.S3_BUCKET, Key: key }),
     { expiresIn: 3600 },
   );
-}
-
-export function publicOrSignedPhotoUrl(key: string | null | undefined): string | undefined {
-  if (!key) return undefined;
-  // Client will call endpoint that returns signed URL; store key as opaque for now
-  // but AuthUser shape expects URI — we resolve at read time in user mapper.
-  return key.startsWith('http') ? key : undefined;
 }

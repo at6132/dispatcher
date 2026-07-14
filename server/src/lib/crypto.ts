@@ -61,7 +61,10 @@ export async function verifyAccessToken(
   token: string,
 ): Promise<AccessClaims | null> {
   try {
-    const { payload } = await jwtVerify(token, accessSecret);
+    const { payload } = await jwtVerify(token, accessSecret, {
+      algorithms: ['HS256'],
+      clockTolerance: 30,
+    });
     if (typeof payload.sub !== 'string') return null;
     if (typeof payload.phone !== 'string') return null;
     return { sub: payload.sub, phone: payload.phone };
@@ -89,7 +92,10 @@ export async function verifyRefreshToken(token: string): Promise<{
   familyId: string;
 } | null> {
   try {
-    const { payload } = await jwtVerify(token, refreshSecret);
+    const { payload } = await jwtVerify(token, refreshSecret, {
+      algorithms: ['HS256'],
+      clockTolerance: 30,
+    });
     if (typeof payload.sub !== 'string') return null;
     if (typeof payload.tid !== 'string') return null;
     if (typeof payload.fid !== 'string') return null;

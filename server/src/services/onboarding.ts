@@ -1,4 +1,4 @@
-import { eq } from 'drizzle-orm';
+import { and, eq, isNotNull } from 'drizzle-orm';
 
 import { db } from '../db/client.js';
 import { driverProfiles, photoUploads, users } from '../db/schema.js';
@@ -6,8 +6,9 @@ import { AppError } from '../lib/errors.js';
 import {
   buildObjectKey,
   extForContentType,
+  headObject,
   isAllowedContentType,
-  objectExists,
+  maxPhotoBytes,
   presignPut,
 } from '../lib/s3.js';
 import { env } from '../config/env.js';
@@ -32,6 +33,42 @@ export type OnboardingInput = {
   vehicleInteriorKey?: string;
   vehicleExteriorKey?: string;
 };
+
+async function assertOwnedConfirmedKey(
+  userId: string,
+  key: string | undefined,
+  kind: 'self' | 'interior' | 'exterior',
+): Promise<string | undefined> {
+  if (!key) return undefined;
+  if (key.startsWith('http://') || key.startsWith('https://') || key.includes('..')) {
+    throw new AppError(400, 'Invalid photo key', 'invalid_photo_key');
+  }
+  const prefix = `users/${userId}/`;
+  if (!key.startsWith(prefix)) {
+    throw new AppError(400, 'Invalid photo key', 'invalid_photo_key');
+  }
+
+  const [row] = await db
+    .select()
+    .from(photoUploads)
+    .where(
+      and(
+        eq(photoUploads.userId, userId),
+        eq(photoUploads.objectKey, key),
+        eq(photoUploads.kind, kind),
+        isNotNull(photoUploads.confirmedAt),
+      ),
+    )
+    .limit(1);
+  if (!row) {
+    throw new AppError(
+      400,
+      'Photo must be uploaded and confirmed first',
+      'photo_not_confirmed',
+    );
+  }
+  return key;
+}
 
 export async function saveOnboarding(
   userId: string,
@@ -60,6 +97,12 @@ export async function saveOnboarding(
   }
   const extraInfo = input.extraInfo?.trim() || undefined;
 
+  const [selfPhotoKey, vehicleInteriorKey, vehicleExteriorKey] = await Promise.all([
+    assertOwnedConfirmedKey(userId, input.selfPhotoKey, 'self'),
+    assertOwnedConfirmedKey(userId, input.vehicleInteriorKey, 'interior'),
+    assertOwnedConfirmedKey(userId, input.vehicleExteriorKey, 'exterior'),
+  ]);
+
   await db
     .insert(driverProfiles)
     .values({
@@ -70,9 +113,9 @@ export async function saveOnboarding(
       yearsDrivingUpstate: Math.floor(input.yearsDrivingUpstate),
       zelle,
       extraInfo,
-      selfPhotoKey: input.selfPhotoKey,
-      vehicleInteriorKey: input.vehicleInteriorKey,
-      vehicleExteriorKey: input.vehicleExteriorKey,
+      selfPhotoKey,
+      vehicleInteriorKey,
+      vehicleExteriorKey,
       updatedAt: new Date(),
     })
     .onConflictDoUpdate({
@@ -84,9 +127,9 @@ export async function saveOnboarding(
         yearsDrivingUpstate: Math.floor(input.yearsDrivingUpstate),
         zelle,
         extraInfo,
-        selfPhotoKey: input.selfPhotoKey,
-        vehicleInteriorKey: input.vehicleInteriorKey,
-        vehicleExteriorKey: input.vehicleExteriorKey,
+        selfPhotoKey,
+        vehicleInteriorKey,
+        vehicleExteriorKey,
         updatedAt: new Date(),
       },
     });
@@ -130,7 +173,7 @@ export async function createPhotoPresign(
     objectKey,
     uploadUrl,
     expiresIn,
-    maxBytes: 5 * 1024 * 1024,
+    maxBytes: maxPhotoBytes(),
   };
 }
 
@@ -149,10 +192,21 @@ export async function confirmPhoto(
   if (!env.s3Enabled) {
     throw new AppError(503, 'Photo storage is not configured', 's3_disabled');
   }
-  const exists = await objectExists(row.objectKey);
-  if (!exists) {
+
+  const meta = await headObject(row.objectKey);
+  if (!meta.exists) {
     throw new AppError(400, 'Upload not found in storage', 'upload_missing');
   }
+  if (meta.contentLength != null && meta.contentLength > maxPhotoBytes()) {
+    throw new AppError(400, 'Photo is too large', 'upload_too_large');
+  }
+  if (meta.contentLength != null && meta.contentLength <= 0) {
+    throw new AppError(400, 'Photo is empty', 'upload_empty');
+  }
+  if (meta.contentType && !isAllowedContentType(meta.contentType.split(';')[0]!.trim())) {
+    throw new AppError(400, 'Unsupported image type', 'invalid_content_type');
+  }
+
   await db
     .update(photoUploads)
     .set({ confirmedAt: new Date() })

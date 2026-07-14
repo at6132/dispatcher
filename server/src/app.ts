@@ -3,6 +3,7 @@ import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
 import Fastify from 'fastify';
 
+import { env } from './config/env.js';
 import { checkDb } from './db/client.js';
 import { AppError } from './lib/errors.js';
 import { checkRedis } from './lib/redis.js';
@@ -15,9 +16,24 @@ import {
 import { meRoutes } from './routes/me.js';
 
 export async function buildApp() {
+  // Behind Railway (or similar) there is exactly one trusted proxy hop.
+  // Spoofed X-Forwarded-For further left is ignored by hop count 1.
   const app = Fastify({
-    logger: true,
-    trustProxy: true,
+    logger: {
+      level: env.NODE_ENV === 'production' ? 'info' : 'debug',
+      redact: {
+        paths: [
+          'req.headers.authorization',
+          'req.headers.cookie',
+          'body.password',
+          'body.refreshToken',
+          'body.passengerPhone',
+          'body.zelle',
+        ],
+        remove: true,
+      },
+    },
+    trustProxy: 1,
     bodyLimit: 1_048_576,
     requestTimeout: 30_000,
   });
@@ -26,10 +42,26 @@ export async function buildApp() {
     global: true,
     contentSecurityPolicy: false,
   });
+
+  // Mobile app does not need reflective CORS. Keep empty allowlist (blocks browsers)
+  // unless explicitly configured — Expo native fetches are not CORS-bound.
+  const allowedOrigins = (process.env.CORS_ORIGINS ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
   await app.register(cors, {
-    origin: true,
-    credentials: true,
+    origin: allowedOrigins.length
+      ? (origin, cb) => {
+          if (!origin || allowedOrigins.includes(origin)) {
+            cb(null, true);
+            return;
+          }
+          cb(null, false);
+        }
+      : false,
+    credentials: false,
   });
+
   await app.register(rateLimit, {
     global: true,
     max: 300,

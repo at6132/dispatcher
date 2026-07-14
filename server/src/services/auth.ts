@@ -44,13 +44,64 @@ async function resolvePhotoUri(
   key: string | null | undefined,
 ): Promise<string | undefined> {
   if (!key) return undefined;
-  if (key.startsWith('http://') || key.startsWith('https://')) return key;
+  // Never treat raw http(s) as storage keys — block URL injection
+  if (key.startsWith('http://') || key.startsWith('https://') || key.includes('..')) {
+    return undefined;
+  }
   if (!env.s3Enabled) return undefined;
   try {
     return await presignGet(key);
   } catch {
     return undefined;
   }
+}
+
+export type PublicProfileDto = {
+  id: string;
+  name: string;
+  onboardingComplete: boolean;
+  onboarding?: {
+    vehicleClass: 'sedan' | 'suv' | 'large_suv' | 'minivan' | 'sprinter';
+    vehicleType: string;
+    seats: number;
+    selfPhotoUri?: string;
+    vehicleInteriorUri?: string;
+    vehicleExteriorUri?: string;
+    yearsDrivingUpstate: number;
+    extraInfo?: string;
+  };
+};
+
+/** Safe for other drivers — no phone, zelle, or lock status. */
+export async function toPublicProfile(userId: string): Promise<PublicProfileDto> {
+  const full = await toAuthUser(userId);
+  return {
+    id: full.id,
+    name: full.name,
+    onboardingComplete: full.onboardingComplete,
+    ...(full.onboarding
+      ? {
+          onboarding: {
+            vehicleClass: full.onboarding.vehicleClass,
+            vehicleType: full.onboarding.vehicleType,
+            seats: full.onboarding.seats,
+            yearsDrivingUpstate: full.onboarding.yearsDrivingUpstate,
+            ...(full.onboarding.extraInfo
+              ? { extraInfo: full.onboarding.extraInfo }
+              : {}),
+            ...(full.onboarding.selfPhotoUri
+              ? { selfPhotoUri: full.onboarding.selfPhotoUri }
+              : {}),
+            ...(full.onboarding.vehicleInteriorUri
+              ? { vehicleInteriorUri: full.onboarding.vehicleInteriorUri }
+              : {}),
+            ...(full.onboarding.vehicleExteriorUri
+              ? { vehicleExteriorUri: full.onboarding.vehicleExteriorUri }
+              : {}),
+          },
+        }
+      : {}),
+  };
 }
 
 export async function toAuthUser(userId: string): Promise<AuthUserDto> {
