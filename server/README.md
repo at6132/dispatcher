@@ -1,8 +1,22 @@
 # Dispatcher API
 
-Node 22 + Fastify + Drizzle. Hosted on Railway. Expo app is the only client.
+Backend for the Dispatcher Expo app: auth, onboarding, **shared drives board**, applications, and **10% commission balances** (off-app pay, in-app settle + Sunday lock).
+
+**Product brief:** [../docs/PRODUCT.md](../docs/PRODUCT.md) — agents should not invent marketplace/payment behavior that contradicts it.
+
+Stack: Node 22 + Fastify + Drizzle. Hosted on Railway. Expo app is the only client.
 
 Public URL (when deploy is healthy): `https://api-production-f4ac.up.railway.app`
+
+## Domain (short)
+
+| Concept | Notes |
+|---|---|
+| Drive | Free-text route; passenger phone hidden until accept; optional address |
+| Application | Includes applicant lat/lng; accept auto-rejects others |
+| Complete | Cost required → 10% balance poster ← completing driver |
+| Settle | Poster marks paid; unsettled past Sunday 11:59 → driver locked |
+| Hide | Poster can hide completed trips they posted |
 
 ## Local
 

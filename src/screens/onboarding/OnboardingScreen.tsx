@@ -186,6 +186,8 @@ export function OnboardingScreen() {
       hasZelle: Boolean(zelle.trim()),
     });
     try {
+      // Auth seals onboardingComplete optimistically — Root will leave this
+      // screen. Don’t clear submitting / show errors after unmount.
       await completeOnboarding(
         buildOnboardingProfile({
           vehicleClass,
@@ -208,8 +210,9 @@ export function OnboardingScreen() {
         requestId: (err as { requestId?: string }).requestId,
         status: (err as { status?: number }).status,
       });
+      // Completion is sealed optimistically + retried on bootstrap. Only show
+      // an error if we’re somehow still on this screen.
       setFormError(mapped.message);
-    } finally {
       setSubmitting(false);
     }
   };

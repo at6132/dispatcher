@@ -4,6 +4,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from 'react';
@@ -23,6 +24,14 @@ import type {
   SignInInput,
   SignUpInput,
 } from './types';
+import {
+  clearPendingOnboarding,
+  clearPersistedUser,
+  persistPendingOnboarding,
+  persistUser,
+  readPendingOnboarding,
+  readPersistedUser,
+} from './userStore';
 import { normalizePhone } from './validation';
 
 type AuthContextValue = {
@@ -36,6 +45,23 @@ type AuthContextValue = {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+function mergeSession(
+  cached: AuthUser | null,
+  remote: AuthUser | null,
+): AuthUser | null {
+  if (!remote) return cached;
+  if (!cached || cached.id !== remote.id) return remote;
+  // Never regress a locally sealed completion if the network read is stale.
+  if (cached.onboardingComplete && !remote.onboardingComplete) {
+    return {
+      ...remote,
+      onboardingComplete: true,
+      onboarding: remote.onboarding ?? cached.onboarding,
+    };
+  }
+  return remote;
+}
+
 /**
  * Auth backed by Dispatcher API.
  * onboardingComplete gates the app until the profile wizard is finished.
@@ -43,21 +69,100 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>('bootstrapping');
   const [user, setUser] = useState<AuthUser | null>(null);
+  const userRef = useRef<AuthUser | null>(null);
+  /** Bumped on every intentional auth mutation so a slow bootstrap can’t clobber it. */
+  const sessionGen = useRef(0);
+
+  userRef.current = user;
+
+  const applyUser = useCallback(async (next: AuthUser | null, genBump = false) => {
+    if (genBump) sessionGen.current += 1;
+    setUser(next);
+    if (next) {
+      await persistUser(next);
+    } else {
+      await clearPersistedUser();
+    }
+  }, []);
 
   useEffect(() => {
     let alive = true;
+    const gen = sessionGen.current;
     (async () => {
       try {
+        const cached = await readPersistedUser();
+        if (!alive || gen !== sessionGen.current) return;
+        if (cached) {
+          // Show cached session immediately so a remount doesn’t flash the wizard.
+          setUser(cached);
+          setStatus('authenticated');
+          logger.info('auth', 'provider.cache_hydrate', {
+            userId: cached.id,
+            onboardingComplete: cached.onboardingComplete,
+          });
+        }
+
         const sessionUser = await getSessionUser();
-        if (!alive) return;
-        setUser(sessionUser);
-        setStatus(sessionUser ? 'authenticated' : 'unauthenticated');
+        if (!alive || gen !== sessionGen.current) return;
+
+        const merged = mergeSession(cached, sessionUser);
+        if (!merged) {
+          setUser(null);
+          setStatus('unauthenticated');
+          await clearPersistedUser();
+          logger.info('auth', 'provider.ready', {
+            status: 'unauthenticated',
+            onboardingComplete: null,
+          });
+          return;
+        }
+
+        // If server still incomplete but we have a pending draft, retry save once.
+        if (!merged.onboardingComplete) {
+          const pending = await readPendingOnboarding();
+          if (pending) {
+            logger.info('auth', 'provider.retry_pending_onboarding', {
+              userId: merged.id,
+            });
+            try {
+              const saved = await saveOnboarding(merged.phone, pending);
+              const sealed: AuthUser = { ...saved, onboardingComplete: true };
+              if (!alive || gen !== sessionGen.current) return;
+              await applyUser(sealed);
+              setStatus('authenticated');
+              await clearPendingOnboarding();
+              logger.info('auth', 'provider.retry_pending_ok', {
+                userId: sealed.id,
+              });
+              return;
+            } catch (err) {
+              logger.warn('auth', 'provider.retry_pending_fail', {
+                err: err instanceof Error ? err.message : String(err),
+              });
+            }
+          }
+        }
+
+        await applyUser(merged);
+        setStatus('authenticated');
         logger.info('auth', 'provider.ready', {
-          status: sessionUser ? 'authenticated' : 'unauthenticated',
-          onboardingComplete: sessionUser?.onboardingComplete ?? null,
+          status: 'authenticated',
+          onboardingComplete: merged.onboardingComplete,
+          userId: merged.id,
         });
       } catch (err) {
-        if (!alive) return;
+        if (!alive || gen !== sessionGen.current) return;
+        const cached = await readPersistedUser();
+        if (cached) {
+          // Offline / blip — keep cached session instead of bouncing to auth.
+          setUser(cached);
+          setStatus('authenticated');
+          logger.warn('auth', 'provider.bootstrap_failed_use_cache', {
+            userId: cached.id,
+            err: err instanceof Error ? err.message : String(err),
+          });
+          return;
+        }
         logger.error('auth', 'provider.bootstrap_failed', {
           err: err instanceof Error ? err.message : String(err),
         });
@@ -68,51 +173,105 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       alive = false;
     };
-  }, []);
+  }, [applyUser]);
 
-  const signIn = useCallback(async (input: SignInInput) => {
-    const next = await authenticateAccount({
-      phone: normalizePhone(input.phone),
-      password: input.password,
-    });
-    setUser(next);
-    setStatus('authenticated');
-    logger.info('auth', 'signed_in', {
-      userId: next.id,
-      onboardingComplete: next.onboardingComplete,
-    });
-  }, []);
-
-  const signUp = useCallback(async (input: SignUpInput) => {
-    const next = await createAccount({
-      phone: normalizePhone(input.phone),
-      name: input.name.trim(),
-      password: input.password,
-    });
-    setUser(next);
-    setStatus('authenticated');
-    logger.info('auth', 'signed_up', {
-      userId: next.id,
-      onboardingComplete: next.onboardingComplete,
-    });
-  }, []);
-
-  const completeOnboarding = useCallback(
-    async (input: OnboardingInput) => {
-      if (!user) throw new Error('Not signed in.');
-      logger.info('auth', 'complete_onboarding.start', { userId: user.id });
-      const next = await saveOnboarding(user.phone, input);
-      setUser(next);
-      logger.info('auth', 'complete_onboarding.done', {
+  const signIn = useCallback(
+    async (input: SignInInput) => {
+      const next = await authenticateAccount({
+        phone: normalizePhone(input.phone),
+        password: input.password,
+      });
+      await clearPendingOnboarding();
+      await applyUser(next, true);
+      setStatus('authenticated');
+      logger.info('auth', 'signed_in', {
         userId: next.id,
         onboardingComplete: next.onboardingComplete,
       });
     },
-    [user],
+    [applyUser],
+  );
+
+  const signUp = useCallback(
+    async (input: SignUpInput) => {
+      const next = await createAccount({
+        phone: normalizePhone(input.phone),
+        name: input.name.trim(),
+        password: input.password,
+      });
+      await clearPendingOnboarding();
+      await applyUser(next, true);
+      setStatus('authenticated');
+      logger.info('auth', 'signed_up', {
+        userId: next.id,
+        onboardingComplete: next.onboardingComplete,
+      });
+    },
+    [applyUser],
+  );
+
+  const completeOnboarding = useCallback(
+    async (input: OnboardingInput) => {
+      const current = userRef.current;
+      if (!current) throw new Error('Not signed in.');
+      logger.info('auth', 'complete_onboarding.start', { userId: current.id });
+
+      // Survive remounts mid-request: draft + optimistic seal.
+      await persistPendingOnboarding(input);
+      const optimistic: AuthUser = {
+        ...current,
+        onboardingComplete: true,
+        onboarding: {
+          vehicleClass: input.vehicleClass,
+          vehicleType: input.vehicleType,
+          seats: input.seats,
+          yearsDrivingUpstate: input.yearsDrivingUpstate,
+          ...(input.extraInfo ? { extraInfo: input.extraInfo } : {}),
+          ...(input.zelle ? { zelle: input.zelle } : {}),
+          ...(input.selfPhotoUri ? { selfPhotoUri: input.selfPhotoUri } : {}),
+          ...(input.vehicleInteriorUri
+            ? { vehicleInteriorUri: input.vehicleInteriorUri }
+            : {}),
+          ...(input.vehicleExteriorUri
+            ? { vehicleExteriorUri: input.vehicleExteriorUri }
+            : {}),
+        },
+      };
+      await applyUser(optimistic, true);
+      setStatus('authenticated');
+
+      try {
+        const next = await saveOnboarding(current.phone, input);
+        const sealed: AuthUser = {
+          ...next,
+          onboardingComplete: true,
+          onboarding: next.onboarding ?? optimistic.onboarding,
+        };
+        await applyUser(sealed, true);
+        await clearPendingOnboarding();
+        logger.info('auth', 'complete_onboarding.done', {
+          userId: sealed.id,
+          onboardingComplete: sealed.onboardingComplete,
+          serverFlag: next.onboardingComplete,
+        });
+      } catch (err) {
+        // Keep optimistic complete so we don’t bounce into the wizard; pending
+        // draft will retry on next bootstrap. Still surface the error to UI.
+        logger.error('auth', 'complete_onboarding.fail_keep_optimistic', {
+          userId: current.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        throw err;
+      }
+    },
+    [applyUser],
   );
 
   const signOut = useCallback(async () => {
+    sessionGen.current += 1;
     await clearSession();
+    await clearPersistedUser();
+    await clearPendingOnboarding();
     setUser(null);
     setStatus('unauthenticated');
     logger.info('auth', 'signed_out');

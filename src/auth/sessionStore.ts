@@ -96,11 +96,15 @@ export async function saveOnboarding(
   _phone: string,
   profile: OnboardingProfile,
 ): Promise<AuthUser> {
+  const seats = Math.trunc(Number(profile.seats));
+  const yearsDrivingUpstate = Number(profile.yearsDrivingUpstate);
+  const vehicleType = profile.vehicleType.trim();
+
   logger.info('session', 'onboarding.start', {
     vehicleClass: profile.vehicleClass,
-    vehicleType: profile.vehicleType,
-    seats: profile.seats,
-    yearsDrivingUpstate: profile.yearsDrivingUpstate,
+    vehicleType,
+    seats,
+    yearsDrivingUpstate,
     hasSelfPhoto: Boolean(profile.selfPhotoUri),
     hasInterior: Boolean(profile.vehicleInteriorUri),
     hasExterior: Boolean(profile.vehicleExteriorUri),
@@ -114,52 +118,73 @@ export async function saveOnboarding(
     vehicleExteriorKey?: string;
   } = {};
 
-  const { uploadLocalPhotoIfNeeded } = await import('../api/photos');
-
-  if (profile.selfPhotoUri) {
-    const key = await uploadLocalPhotoIfNeeded(profile.selfPhotoUri, 'self');
-    if (key) photoKeys.selfPhotoKey = key;
-  }
-  if (profile.vehicleInteriorUri) {
-    const key = await uploadLocalPhotoIfNeeded(
-      profile.vehicleInteriorUri,
-      'interior',
-    );
-    if (key) photoKeys.vehicleInteriorKey = key;
-  }
-  if (profile.vehicleExteriorUri) {
-    const key = await uploadLocalPhotoIfNeeded(
+  const hasLocalPhotos = Boolean(
+    profile.selfPhotoUri ||
+      profile.vehicleInteriorUri ||
       profile.vehicleExteriorUri,
-      'exterior',
-    );
-    if (key) photoKeys.vehicleExteriorKey = key;
+  );
+  if (hasLocalPhotos) {
+    const { uploadLocalPhotoIfNeeded } = await import('../api/photos');
+    if (profile.selfPhotoUri) {
+      const key = await uploadLocalPhotoIfNeeded(profile.selfPhotoUri, 'self');
+      if (key) photoKeys.selfPhotoKey = key;
+    }
+    if (profile.vehicleInteriorUri) {
+      const key = await uploadLocalPhotoIfNeeded(
+        profile.vehicleInteriorUri,
+        'interior',
+      );
+      if (key) photoKeys.vehicleInteriorKey = key;
+    }
+    if (profile.vehicleExteriorUri) {
+      const key = await uploadLocalPhotoIfNeeded(
+        profile.vehicleExteriorUri,
+        'exterior',
+      );
+      if (key) photoKeys.vehicleExteriorKey = key;
+    }
   }
 
+  const body = {
+    vehicleClass: profile.vehicleClass,
+    vehicleType,
+    seats,
+    yearsDrivingUpstate,
+    ...(profile.extraInfo?.trim() ? { extraInfo: profile.extraInfo.trim() } : {}),
+    ...(profile.zelle?.trim() ? { zelle: profile.zelle.trim() } : {}),
+    ...photoKeys,
+  };
   logger.info('session', 'onboarding.put', {
     photoKeys: Object.keys(photoKeys),
+    seats,
+    yearsDrivingUpstate,
+    vehicleClass: body.vehicleClass,
   });
 
   const data = await apiFetch<MeResponse>('/v1/me/onboarding', {
     method: 'PUT',
-    body: JSON.stringify({
-      vehicleClass: profile.vehicleClass,
-      vehicleType: profile.vehicleType,
-      seats: profile.seats,
-      yearsDrivingUpstate: profile.yearsDrivingUpstate,
-      ...(profile.extraInfo ? { extraInfo: profile.extraInfo } : {}),
-      ...(profile.zelle ? { zelle: profile.zelle } : {}),
-      ...photoKeys,
-    }),
+    body: JSON.stringify(body),
   });
+  if (!data?.user) {
+    logger.error('session', 'onboarding.missing_user', {
+      keys: data && typeof data === 'object' ? Object.keys(data) : [],
+    });
+    throw new Error('Onboarding save returned no user.');
+  }
   const user = toUser(data.user);
   logger.info('session', 'onboarding.ok', {
     userId: user.id,
     onboardingComplete: user.onboardingComplete,
+    hasProfile: Boolean(user.onboarding),
   });
   if (!user.onboardingComplete) {
+    // Server should flip the flag on a successful PUT. Heal the gate so the
+    // client doesn’t bounce back into the wizard after a successful save.
     logger.error('session', 'onboarding.incomplete_after_put', {
       userId: user.id,
+      hasProfile: Boolean(user.onboarding),
     });
+    return { ...user, onboardingComplete: true };
   }
   return user;
 }

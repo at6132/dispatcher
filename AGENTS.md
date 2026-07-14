@@ -1,3 +1,13 @@
+# Dispatcher — agent notes
+
+## Product (read first)
+
+Canonical brief: **[docs/PRODUCT.md](./docs/PRODUCT.md)** · always-on rule: `.cursor/rules/product.mdc`
+
+Dispatcher is a **simple shared drive board** for ~500–600 drivers (WhatsApp replacement). Free-text routes (not maps), apply → accept → unlock passenger phone, complete with cost, **10% balance** to poster paid off-app, Sunday lock if unsettled. **Extremely simple** + **bad-service / offline-first** on every feature.
+
+Do not turn this into Uber, Stripe pay-in, or a map-heavy product.
+
 # Expo
 
 Read the exact versioned docs at https://docs.expo.dev/versions/v54.0.0/ before writing any code.

@@ -57,8 +57,9 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
       .object({
         vehicleClass,
         vehicleType: z.string().min(1).max(60),
-        seats: z.number().int().min(1).max(20),
-        yearsDrivingUpstate: z.number().min(0).max(80),
+        // coerce: some clients briefly serialize numbers as strings
+        seats: z.coerce.number().int().min(1).max(20),
+        yearsDrivingUpstate: z.coerce.number().min(0).max(80),
         extraInfo: z.string().max(2000).optional(),
         zelle: z.string().max(120).optional(),
         selfPhotoKey: z.string().max(512).optional(),

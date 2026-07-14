@@ -1,6 +1,7 @@
 {
   "name": "dispatcher-api",
   "version": "1.0.0",
+  "description": "Dispatcher API — drives board, applications, 10% balances. See ../docs/PRODUCT.md.",
   "private": true,
   "type": "module",
   "engines": {
@@ -11,7 +12,7 @@
     "build": "tsc -p tsconfig.json",
     "start": "node dist/index.js",
     "db:generate": "drizzle-kit generate",
-    "db:migrate": "tsx src/db/migrate.ts",
+    "db:migrate": "node dist/db/migrate.js",
     "db:studio": "drizzle-kit studio",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },

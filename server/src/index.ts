@@ -1,5 +1,4 @@
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import { migrate } from 'drizzle-orm/postgres-js/migrator';
 
 import { env } from './config/env.js';
@@ -12,10 +11,8 @@ import {
 } from './lib/telegram.js';
 import { startSundayLockWorker } from './workers/sundayLock.js';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
-
 async function main() {
-  const migrationsFolder = path.join(__dirname, '../drizzle');
+  const migrationsFolder = path.join(process.cwd(), 'drizzle');
   // eslint-disable-next-line no-console
   console.log(
     JSON.stringify({

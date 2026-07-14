@@ -101,7 +101,17 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
       .object({
         routeText: z.string().min(1).max(2000),
         passengerPhone: z.string().min(5).max(32),
+        vehicleClass: z.enum([
+          'sedan',
+          'suv',
+          'large_suv',
+          'minivan',
+          'sprinter',
+        ]),
+        seats: z.coerce.number().int().min(1).max(20),
+        tripType: z.enum(['one_way', 'round_trip']),
         address: z.string().max(500).optional(),
+        extraInfo: z.string().max(2000).optional(),
         fromPlace: z.string().max(200).optional(),
         toPlace: z.string().max(200).optional(),
       })

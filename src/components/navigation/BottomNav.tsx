@@ -1,73 +1,202 @@
-import { useRef } from 'react';
+import { useRef, useState } from 'react';
 import {
   Animated,
+  Platform,
   Pressable,
   StyleSheet,
   Text,
   View,
+  type LayoutChangeEvent,
 } from 'react-native';
+import MaskedView from '@react-native-masked-view/masked-view';
+import { BlurView } from 'expo-blur';
+import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import Svg, { Path } from 'react-native-svg';
 import { Home, Landmark, Plus } from 'lucide-react-native';
 
 import { Icon } from '../ui/Icon';
+import { blur, colors, fonts, motion, space, type } from '../../theme';
 import {
-  GlassSurface,
-  colors,
-  elevation,
-  fonts,
-  motion,
-  radius,
-  space,
-  type,
-} from '../../theme';
+  dockCanvasHeight,
+  dockCircleCenterY,
+  dockSilhouettePath,
+  type DockGeom,
+} from './dockPath';
 
 export type MainTab = 'home' | 'bank';
+
+/** Window coords of the + face — used to warp the compose screen open. */
+export type AddOrigin = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
 
 type BottomNavProps = {
   active: MainTab;
   onChange: (tab: MainTab) => void;
-  onAddPress?: () => void;
+  onAddPress?: (origin: AddOrigin) => void;
 };
 
-const BAR_HEIGHT = 64;
-const FAB_SIZE = 58;
+/**
+ * Compact organic dock — glass hugs Home · + · Bank (minimal empty chrome).
+ */
+const FACE = 96;
+/** Thin rim around the plus — just enough to read the hug. */
+const RIM = 6;
+const MID_H = FACE + RIM * 2;
+/** End band tight to the tab content. */
+const END_H = 52;
+const PLUS = 52;
+const BAR_HEIGHT = END_H;
+/** Gap between plus edge and Home / Bank. */
+const FACE_GAP = 4;
+const TAB_W = 60;
+/** Glass past the outer tabs. */
+const SIDE_PAD = 8;
+const DOCK_W =
+  SIDE_PAD + TAB_W + FACE + FACE_GAP * 2 + TAB_W + SIDE_PAD;
+
+const GEOM: DockGeom = {
+  midH: MID_H,
+  endH: END_H,
+};
+
+const DOCK_H = dockCanvasHeight(GEOM);
+const CIRCLE_CY = dockCircleCenterY(GEOM);
 
 /**
- * Floating glass dock — Home · massive + · Bank.
- * Glass chrome only; sits over mist, not edge-to-edge.
+ * Floating dock — one continuous glass blob: Home · + · Bank.
  */
 export function BottomNav({ active, onChange, onAddPress }: BottomNavProps) {
   const insets = useSafeAreaInsets();
   const bottomPad = Math.max(insets.bottom, space.sm);
+  const [width, setWidth] = useState(0);
+
+  const onLayout = (e: LayoutChangeEvent) => {
+    const next = Math.round(e.nativeEvent.layout.width);
+    if (next > 0 && next !== width) setWidth(next);
+  };
 
   return (
     <View
       pointerEvents="box-none"
       style={[styles.wrap, { paddingBottom: bottomPad }]}
     >
-      <GlassSurface
-        style={styles.bar}
-        contentStyle={styles.barContent}
-        intensity={48}
-      >
-        <NavItem
-          label="Home"
-          active={active === 'home'}
-          onPress={() => onChange('home')}
-          icon={Home}
-        />
+      <View style={styles.dock} onLayout={onLayout}>
+        {width > 0 ? (
+          <View style={styles.silhouette} pointerEvents="none">
+            <DockGlass width={width} />
+          </View>
+        ) : null}
 
-        <View style={styles.fabSlot}>
-          <FabButton onPress={onAddPress} />
+        {/* Tabs sit on the hug center-line; spacer keeps room for the face */}
+        <View
+          pointerEvents="box-none"
+          style={[styles.row, { top: CIRCLE_CY - BAR_HEIGHT / 2 }]}
+        >
+          <NavItem
+            label="Home"
+            active={active === 'home'}
+            onPress={() => onChange('home')}
+            icon={Home}
+          />
+          <View style={styles.faceSpacer} />
+          <NavItem
+            label="Bank"
+            active={active === 'bank'}
+            onPress={() => onChange('bank')}
+            icon={Landmark}
+          />
         </View>
 
-        <NavItem
-          label="Bank"
-          active={active === 'bank'}
-          onPress={() => onChange('bank')}
-          icon={Landmark}
+        {/* Plus — exact center of the glass hug circle */}
+        <View
+          pointerEvents="box-none"
+          style={[styles.faceLayer, { top: CIRCLE_CY - FACE / 2 }]}
+        >
+          <AddButton onPress={onAddPress} />
+        </View>
+      </View>
+    </View>
+  );
+}
+
+function DockGlass({ width }: { width: number }) {
+  const height = DOCK_H;
+  const d = dockSilhouettePath(width, GEOM);
+  const useFlat = Platform.OS === 'web';
+
+  const fill = (
+    <>
+      {useFlat ? (
+        <View style={[StyleSheet.absoluteFill, styles.flatFill]} />
+      ) : (
+        <BlurView
+          intensity={56}
+          tint={blur.tint}
+          style={StyleSheet.absoluteFill}
+          {...(Platform.OS === 'android'
+            ? { experimentalBlurMethod: 'dimezisBlurView' as const }
+            : null)}
         />
-      </GlassSurface>
+      )}
+      <View style={[StyleSheet.absoluteFill, styles.wash]} />
+      <LinearGradient
+        colors={[colors.glassHighlight, 'transparent', 'rgba(0,0,0,0.14)']}
+        locations={[0, 0.4, 1]}
+        start={{ x: 0.5, y: 0 }}
+        end={{ x: 0.5, y: 1 }}
+        style={StyleSheet.absoluteFill}
+      />
+    </>
+  );
+
+  return (
+    <View style={{ width, height }}>
+      <View style={styles.shadowHost}>
+        <Svg width={width} height={height}>
+          <Path d={d} fill="rgba(0,0,0,0.35)" />
+        </Svg>
+      </View>
+
+      {useFlat ? (
+        <Svg width={width} height={height} style={StyleSheet.absoluteFill}>
+          <Path
+            d={d}
+            fill={colors.glassStrong}
+            stroke={colors.glassBorder}
+            strokeWidth={StyleSheet.hairlineWidth * 2}
+          />
+        </Svg>
+      ) : (
+        <MaskedView
+          style={StyleSheet.absoluteFill}
+          maskElement={
+            <Svg width={width} height={height}>
+              <Path d={d} fill="#ffffff" />
+            </Svg>
+          }
+        >
+          <View style={{ width, height }}>{fill}</View>
+        </MaskedView>
+      )}
+
+      <Svg
+        width={width}
+        height={height}
+        style={StyleSheet.absoluteFill}
+        pointerEvents="none"
+      >
+        <Path
+          d={d}
+          fill="transparent"
+          stroke={colors.glassBorder}
+          strokeWidth={StyleSheet.hairlineWidth * 2}
+        />
+      </Svg>
     </View>
   );
 }
@@ -107,9 +236,9 @@ function NavItem({ label, active, onPress, icon }: NavItemProps) {
       >
         <Icon
           icon={icon}
-          size="nav"
+          size={24}
           color={active ? colors.ink : colors.muted}
-          strokeWidth={active ? 2 : 1.6}
+          strokeWidth={active ? 2 : 1.7}
         />
         <Text
           style={[styles.itemLabel, active ? styles.itemLabelActive : null]}
@@ -121,7 +250,8 @@ function NavItem({ label, active, onPress, icon }: NavItemProps) {
   );
 }
 
-function FabButton({ onPress }: { onPress?: () => void }) {
+function AddButton({ onPress }: { onPress?: (origin: AddOrigin) => void }) {
+  const faceRef = useRef<View>(null);
   const scale = useRef(new Animated.Value(1)).current;
 
   const animateTo = (value: number) => {
@@ -132,26 +262,40 @@ function FabButton({ onPress }: { onPress?: () => void }) {
     }).start();
   };
 
+  const handlePress = () => {
+    faceRef.current?.measureInWindow((x, y, width, height) => {
+      onPress?.({ x, y, width, height });
+    });
+  };
+
   return (
-    <Animated.View style={[styles.fabShadow, { transform: [{ scale }] }]}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Add"
-        onPress={onPress}
-        onPressIn={() => animateTo(motion.pressScale)}
-        onPressOut={() => animateTo(1)}
-        style={({ pressed }) => [styles.fab, pressed && styles.fabPressed]}
-      >
-        <Icon icon={Plus} size="fab" color={colors.onAccent} strokeWidth={2.25} />
-      </Pressable>
+    <Animated.View style={{ transform: [{ scale }] }}>
+      <View ref={faceRef} collapsable={false}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Add"
+          onPress={handlePress}
+          onPressIn={() => animateTo(motion.pressScale)}
+          onPressOut={() => animateTo(1)}
+          style={({ pressed }) => [styles.face, pressed && styles.facePressed]}
+          hitSlop={4}
+        >
+          <Icon
+            icon={Plus}
+            size={PLUS}
+            color={colors.onAccent}
+            strokeWidth={2.6}
+          />
+        </Pressable>
+      </View>
     </Animated.View>
   );
 }
 
-/** Space to reserve so scroll content clears the floating dock. */
+/** Space so scroll content clears the dock. */
 export function bottomNavClearance(bottomInset: number) {
   const pad = Math.max(bottomInset, space.sm);
-  return pad + BAR_HEIGHT + space.md + FAB_SIZE * 0.28;
+  return pad + DOCK_H + space.lg;
 }
 
 const styles = StyleSheet.create({
@@ -160,29 +304,48 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     bottom: 0,
-    paddingHorizontal: space.xl,
+    paddingHorizontal: space.md,
     alignItems: 'center',
   },
-  bar: {
-    width: '100%',
-    maxWidth: 400,
-    borderRadius: radius.xl + 8,
-    ...elevation.whisper,
+  dock: {
+    width: DOCK_W,
+    height: DOCK_H,
   },
-  barContent: {
-    minHeight: BAR_HEIGHT,
+  silhouette: {
+    ...StyleSheet.absoluteFillObject,
+  },
+  shadowHost: {
+    ...StyleSheet.absoluteFillObject,
+    transform: [{ translateY: 4 }],
+    opacity: 0.4,
+  },
+  flatFill: {
+    backgroundColor: colors.glassStrong,
+  },
+  wash: {
+    backgroundColor: colors.glass,
+  },
+  row: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: BAR_HEIGHT,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: space.sm,
+    justifyContent: 'center',
+    paddingHorizontal: SIDE_PAD,
   },
   item: {
-    flex: 1,
+    flexGrow: 0,
+    flexShrink: 0,
+    width: TAB_W,
   },
   itemPress: {
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 3,
-    paddingVertical: space.sm,
+    gap: 2,
+    paddingVertical: 2,
+    width: '100%',
   },
   itemPressed: {
     opacity: 0.88,
@@ -191,34 +354,33 @@ const styles = StyleSheet.create({
     ...type.label,
     fontFamily: fonts.sansMedium,
     fontSize: 11,
-    letterSpacing: 0.35,
+    letterSpacing: 0.3,
     textTransform: 'uppercase',
     color: colors.muted,
   },
   itemLabelActive: {
     color: colors.ink,
   },
-  fabSlot: {
-    width: FAB_SIZE + space.md,
+  faceSpacer: {
+    width: FACE + FACE_GAP * 2,
+  },
+  faceLayer: {
+    position: 'absolute',
+    left: 0,
+    right: 0,
+    height: FACE,
     alignItems: 'center',
     justifyContent: 'center',
   },
-  fabShadow: {
-    ...elevation.whisper,
-  },
-  fab: {
-    width: FAB_SIZE,
-    height: FAB_SIZE,
-    marginTop: -(FAB_SIZE * 0.28),
-    marginBottom: -(FAB_SIZE * 0.18),
-    borderRadius: radius.xl,
+  face: {
+    width: FACE,
+    height: FACE,
+    borderRadius: FACE / 2,
     backgroundColor: colors.accent,
     alignItems: 'center',
     justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.glassHighlight,
   },
-  fabPressed: {
-    opacity: 0.92,
+  facePressed: {
+    opacity: 0.9,
   },
 });

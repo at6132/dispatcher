@@ -50,7 +50,12 @@ async function resolvePhotoUri(
   }
   if (!env.s3Enabled) return undefined;
   try {
-    return await presignGet(key);
+    return await Promise.race([
+      presignGet(key),
+      new Promise<never>((_, reject) => {
+        setTimeout(() => reject(new Error('presign timeout')), 5000);
+      }),
+    ]);
   } catch {
     return undefined;
   }

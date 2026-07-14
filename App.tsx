@@ -40,7 +40,9 @@ function Root() {
       });
       return;
     }
-    logger.info('nav', 'gate', { screen: route === 'contactSupport' ? 'support' : 'auth' });
+    logger.info('nav', 'gate', {
+      screen: route === 'contactSupport' ? 'support' : 'auth',
+    });
   }, [status, user?.id, user?.onboardingComplete, route]);
 
   if (status === 'bootstrapping') {
@@ -73,21 +75,26 @@ export default function App() {
     DMSans_500Medium,
     DMSans_600SemiBold,
   });
-
-  if (!fontsLoaded) {
-    return (
-      <View style={styles.boot}>
-        <LoadingHint label="Loading…" variant="block" />
-        <StatusBar style="light" />
-      </View>
-    );
-  }
+  // Latch so a transient fontsLoaded=false never unmounts Root / onboarding.
+  const [fontsReady, setFontsReady] = useState(false);
+  useEffect(() => {
+    if (fontsLoaded) setFontsReady(true);
+  }, [fontsLoaded]);
 
   return (
     <SafeAreaProvider initialMetrics={initialWindowMetrics}>
       <AuthProvider>
-        <Root />
-        <StatusBar style="light" />
+        {fontsReady ? (
+          <>
+            <Root />
+            <StatusBar style="light" />
+          </>
+        ) : (
+          <View style={styles.boot}>
+            <LoadingHint label="Loading…" variant="block" />
+            <StatusBar style="light" />
+          </View>
+        )}
       </AuthProvider>
     </SafeAreaProvider>
   );

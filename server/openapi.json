@@ -173,12 +173,12 @@
     "/v1/drives": {
       "get": {
         "security": [{ "bearerAuth": [] }],
-        "summary": "List drives (open board by default)",
+        "summary": "List drives. status=open|active|history|assigned|mine; completed=true for public completed feed. Items include poster (and assignee when present).",
         "responses": { "200": { "description": "OK" } }
       },
       "post": {
         "security": [{ "bearerAuth": [] }],
-        "summary": "Post a drive",
+        "summary": "Post a drive (title, passenger phone, vehicle class, seats, trip type; optional address + extra info)",
         "responses": { "201": { "description": "Created" } }
       }
     },

@@ -12,8 +12,8 @@ export const iconSize = {
   xl: 28,
   /** Tab side icons (Home / Bank) */
   nav: 22,
-  /** Center FAB plus */
-  fab: 30,
+  /** Center FAB plus glyph (inside steel circle) */
+  fab: 52,
 } as const;
 
 export type IconSizeToken = keyof typeof iconSize;

@@ -14,11 +14,27 @@ type ConfirmResponse = {
   kind: 'self' | 'interior' | 'exterior';
 };
 
+const UPLOAD_TIMEOUT_MS = 25_000;
+
 function guessContentType(uri: string): string {
   const lower = uri.toLowerCase();
   if (lower.includes('.png')) return 'image/png';
   if (lower.includes('.webp')) return 'image/webp';
   return 'image/jpeg';
+}
+
+async function fetchWithTimeout(
+  input: RequestInfo | URL,
+  init: RequestInit | undefined,
+  ms: number,
+): Promise<Response> {
+  const ctrl = new AbortController();
+  const timer = setTimeout(() => ctrl.abort(), ms);
+  try {
+    return await fetch(input, { ...init, signal: ctrl.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /**
@@ -45,15 +61,19 @@ export async function uploadLocalPhotoIfNeeded(
       uploadId: presign.uploadId,
     });
 
-    const fileRes = await fetch(uri);
+    const fileRes = await fetchWithTimeout(uri, undefined, UPLOAD_TIMEOUT_MS);
     const blob = await fileRes.blob();
     let put: Response;
     try {
-      put = await fetch(presign.uploadUrl, {
-        method: 'PUT',
-        headers: { 'Content-Type': contentType },
-        body: blob,
-      });
+      put = await fetchWithTimeout(
+        presign.uploadUrl,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': contentType },
+          body: blob,
+        },
+        UPLOAD_TIMEOUT_MS,
+      );
     } catch (err) {
       logger.warn('photos', 's3_put.network_error', {
         kind,

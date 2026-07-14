@@ -25,6 +25,7 @@ export const driveStatusEnum = pgEnum('drive_status', [
   'completed',
   'cancelled',
 ]);
+export const tripTypeEnum = pgEnum('trip_type', ['one_way', 'round_trip']);
 export const applicationStatusEnum = pgEnum('application_status', [
   'pending',
   'accepted',
@@ -108,6 +109,10 @@ export const drives = pgTable(
     toPlace: text('to_place'),
     passengerPhone: text('passenger_phone').notNull(),
     address: text('address'),
+    vehicleClass: vehicleClassEnum('vehicle_class').notNull().default('sedan'),
+    seats: integer('seats').notNull().default(4),
+    tripType: tripTypeEnum('trip_type').notNull().default('one_way'),
+    extraInfo: text('extra_info'),
     status: driveStatusEnum('status').notNull().default('open'),
     assigneeId: uuid('assignee_id').references(() => users.id, {
       onDelete: 'set null',

@@ -1,0 +1,38 @@
+---
+description: Dispatcher product purpose — shared drive board, offline-first, privacy, 10% balances
+alwaysApply: true
+---
+
+# Product purpose
+
+Full brief: `docs/PRODUCT.md`. Short rules for every change:
+
+## What this is
+
+WhatsApp replacement drive board for ~500–600 drivers. Anyone posts free-text routes (e.g. `Monticello → Brooklyn`); others apply; poster accepts one; passenger phone unlocks only then. Complete → cost + 10% balance to poster (pay outside app); Sunday lock if unsettled. One shared board.
+
+## Non-negotiables
+
+1. **Extremely simple** UI/flows — WhatsApp mental model
+2. **Bad-service friendly** — cache board, queue writes, retries, clear offline/pending/synced; Catskills cell is normal
+3. **Privacy** — route (+ tags) on board; phone/address only after accept
+4. **No in-app payments** — settlement mark only; money moves via Zelle/Venmo/cash
+
+## Drive posts
+
+- Route text required; passenger phone required (hidden until accept); address optional
+- Tags: **one-way | round-trip** and **waiting included | waiting not included** (visible on board)
+- Not map/GPS posting
+
+## Flow facts
+
+- Apply includes applicant exact location (prefer cached last-known GPS)
+- Accept auto-rejects others; unassign allowed; re-assign needs applicant re-confirm
+- Complete: cost required; explanation / mileage / waiting free text
+- Completed jobs public; posters may hide their posted trips
+
+## Don’t
+
+- Don’t build Uber-style live tracking / map-first routing for v1
+- Don’t require good Wi‑Fi then “add offline later” — offline is part of done
+- Don’t invent separate roles or multi-group boards for v1

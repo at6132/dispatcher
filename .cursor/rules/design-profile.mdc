@@ -5,6 +5,8 @@ alwaysApply: true
 
 # Design profile
 
+Product purpose (what to build): `docs/PRODUCT.md` and `.cursor/rules/product.mdc`.
+
 Quiet liquid glass on **mid dusk**. Low profile. Low texture. Minimal. Easy.
 
 Shipping stack: Expo SDK 54, React Native, tokens + surfaces in `src/theme`.
@@ -43,7 +45,7 @@ Shipping stack: Expo SDK 54, React Native, tokens + surfaces in `src/theme`.
 
 ## Product patterns (keep consistent)
 
-- **Bottom nav** (`BottomNav`): floating glass pill dock — **Home** · massive steel **+** · **Bank**. Not edge-to-edge. Center FAB bulges above the bar; tabs use Lucide + uppercase micro-labels. Glass chrome over mist
+- **Bottom nav** (`BottomNav`): floating glass dock — **Home** · large steel **circular +** · **Bank**. Compact organic blob sized to the controls (no sparse empty glass). Center hugs the + face; soft taper to the ends. Not edge-to-edge. Tabs use Lucide + uppercase micro-labels.
 - **Main shell** (`MainShell`): Home / Bank tabs with local state + demo data until API is wired
 - **Home**: split hero (“Near” + “*you*”), your listing + nearby `DriverCard`s (`showMap={false}`), clear space for floating dock
 - **Driver listing** (`DriverCard`): what dispatchers see — PFP avatar, `Name · VehicleType` same size on one line, phone, seats/years detail, optional exterior/interior thumbs. Home preview uses `showMap={false}`

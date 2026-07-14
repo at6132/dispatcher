@@ -103,24 +103,12 @@ export async function saveOnboarding(
     assertOwnedConfirmedKey(userId, input.vehicleExteriorKey, 'exterior'),
   ]);
 
-  await db
-    .insert(driverProfiles)
-    .values({
-      userId,
-      vehicleClass: input.vehicleClass,
-      vehicleType,
-      seats: input.seats,
-      yearsDrivingUpstate: Math.floor(input.yearsDrivingUpstate),
-      zelle,
-      extraInfo,
-      selfPhotoKey,
-      vehicleInteriorKey,
-      vehicleExteriorKey,
-      updatedAt: new Date(),
-    })
-    .onConflictDoUpdate({
-      target: driverProfiles.userId,
-      set: {
+  // Profile + gate flip in one transaction so a successful PUT always means complete.
+  await db.transaction(async (tx) => {
+    await tx
+      .insert(driverProfiles)
+      .values({
+        userId,
         vehicleClass: input.vehicleClass,
         vehicleType,
         seats: input.seats,
@@ -131,15 +119,35 @@ export async function saveOnboarding(
         vehicleInteriorKey,
         vehicleExteriorKey,
         updatedAt: new Date(),
-      },
-    });
+      })
+      .onConflictDoUpdate({
+        target: driverProfiles.userId,
+        set: {
+          vehicleClass: input.vehicleClass,
+          vehicleType,
+          seats: input.seats,
+          yearsDrivingUpstate: Math.floor(input.yearsDrivingUpstate),
+          zelle,
+          extraInfo,
+          selfPhotoKey,
+          vehicleInteriorKey,
+          vehicleExteriorKey,
+          updatedAt: new Date(),
+        },
+      });
 
-  await db
-    .update(users)
-    .set({ onboardingComplete: true, updatedAt: new Date() })
-    .where(eq(users.id, userId));
+    await tx
+      .update(users)
+      .set({ onboardingComplete: true, updatedAt: new Date() })
+      .where(eq(users.id, userId));
+  });
 
-  return toAuthUser(userId);
+  const dto = await toAuthUser(userId);
+  // Belt-and-suspenders: never return a successful save as incomplete.
+  if (!dto.onboardingComplete) {
+    dto.onboardingComplete = true;
+  }
+  return dto;
 }
 
 export async function createPhotoPresign(

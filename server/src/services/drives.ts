@@ -39,6 +39,10 @@ export type DriveDto = {
   assigneeId?: string;
   passengerPhone?: string;
   address?: string;
+  vehicleClass: 'sedan' | 'suv' | 'large_suv' | 'minivan' | 'sprinter';
+  seats: number;
+  tripType: 'one_way' | 'round_trip';
+  extraInfo?: string;
   costCents?: number;
   miles?: string;
   waitMinutes?: number;
@@ -47,6 +51,12 @@ export type DriveDto = {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+};
+
+/** Board list row — drive + public party profiles for the feed. */
+export type DriveListItemDto = DriveDto & {
+  poster: Awaited<ReturnType<typeof toPublicProfile>>;
+  assignee?: Awaited<ReturnType<typeof toPublicProfile>>;
 };
 
 function mapDrive(
@@ -64,6 +74,10 @@ function mapDrive(
     ...(row.assigneeId ? { assigneeId: row.assigneeId } : {}),
     ...(unlocked ? { passengerPhone: row.passengerPhone } : {}),
     ...(unlocked && row.address ? { address: row.address } : {}),
+    vehicleClass: row.vehicleClass,
+    seats: row.seats,
+    tripType: row.tripType,
+    ...(row.extraInfo ? { extraInfo: row.extraInfo } : {}),
     ...(row.costCents != null ? { costCents: row.costCents } : {}),
     ...(row.miles != null ? { miles: String(row.miles) } : {}),
     ...(row.waitMinutes != null ? { waitMinutes: row.waitMinutes } : {}),
@@ -75,12 +89,26 @@ function mapDrive(
   };
 }
 
+const vehicleClasses = [
+  'sedan',
+  'suv',
+  'large_suv',
+  'minivan',
+  'sprinter',
+] as const;
+
+const tripTypes = ['one_way', 'round_trip'] as const;
+
 export async function createDrive(
   posterId: string,
   input: {
     routeText: string;
     passengerPhone: string;
+    vehicleClass: (typeof vehicleClasses)[number];
+    seats: number;
+    tripType: (typeof tripTypes)[number];
     address?: string;
+    extraInfo?: string;
     fromPlace?: string;
     toPlace?: string;
   },
@@ -100,14 +128,27 @@ export async function createDrive(
 
   const routeText = input.routeText.trim();
   if (routeText.length < 2 || routeText.length > 200) {
-    throw new AppError(400, 'Enter a valid route', 'invalid_route');
+    throw new AppError(400, 'Enter a valid title', 'invalid_route');
   }
   if (!isValidPhone(input.passengerPhone)) {
     throw new AppError(400, 'Enter a valid passenger phone', 'invalid_passenger_phone');
   }
+  if (!vehicleClasses.includes(input.vehicleClass)) {
+    throw new AppError(400, 'Pick a vehicle class', 'invalid_vehicle_class');
+  }
+  if (!Number.isInteger(input.seats) || input.seats < 1 || input.seats > 20) {
+    throw new AppError(400, 'Enter a valid seat count', 'invalid_seats');
+  }
+  if (!tripTypes.includes(input.tripType)) {
+    throw new AppError(400, 'Pick one way or round trip', 'invalid_trip_type');
+  }
   const address = input.address?.trim() || undefined;
   if (address && address.length > 300) {
     throw new AppError(400, 'Address is too long', 'invalid_address');
+  }
+  const extraInfo = input.extraInfo?.trim() || undefined;
+  if (extraInfo && extraInfo.length > 1000) {
+    throw new AppError(400, 'Extra info is too long', 'invalid_extra_info');
   }
 
   const [row] = await db
@@ -116,7 +157,11 @@ export async function createDrive(
       posterId,
       routeText,
       passengerPhone: normalizePhone(input.passengerPhone),
+      vehicleClass: input.vehicleClass,
+      seats: input.seats,
+      tripType: input.tripType,
       address,
+      extraInfo,
       fromPlace: input.fromPlace?.trim() || undefined,
       toPlace: input.toPlace?.trim() || undefined,
     })
@@ -129,7 +174,7 @@ export async function createDrive(
 export async function listDrives(
   viewerId: string,
   query: { status?: string; completed?: boolean; limit?: number; cursor?: string },
-): Promise<{ items: DriveDto[]; nextCursor?: string }> {
+): Promise<{ items: DriveListItemDto[]; nextCursor?: string }> {
   const limit = Math.min(Math.max(query.limit ?? 50, 1), 100);
   const conditions = [];
 
@@ -139,9 +184,15 @@ export async function listDrives(
     conditions.push(eq(drives.hiddenByPoster, false));
   } else if (query.status === 'open') {
     conditions.push(eq(drives.status, 'open'));
-  } else if (query.status === 'assigned') {
-    // Only drives involving the viewer — prevent global assigned dump
+  } else if (query.status === 'assigned' || query.status === 'active') {
+    // Active / scheduled for the viewer — assigned drives they're in
     conditions.push(eq(drives.status, 'assigned'));
+    conditions.push(
+      sql`(${drives.posterId} = ${viewerId} OR ${drives.assigneeId} = ${viewerId})`,
+    );
+  } else if (query.status === 'history') {
+    // Viewer's completed drives (posted or driven) — includes hidden-from-public
+    conditions.push(eq(drives.status, 'completed'));
     conditions.push(
       sql`(${drives.posterId} = ${viewerId} OR ${drives.assigneeId} = ${viewerId})`,
     );
@@ -168,8 +219,39 @@ export async function listDrives(
     .limit(limit + 1);
 
   const slice = rows.slice(0, limit);
+  const profileIds = new Set<string>();
+  for (const row of slice) {
+    profileIds.add(row.posterId);
+    if (row.assigneeId) profileIds.add(row.assigneeId);
+  }
+
+  const profiles = new Map<string, Awaited<ReturnType<typeof toPublicProfile>>>();
+  await Promise.all(
+    [...profileIds].map(async (id) => {
+      try {
+        profiles.set(id, await toPublicProfile(id));
+      } catch {
+        // Skip missing profiles — list still returns the drive
+      }
+    }),
+  );
+
+  const items: DriveListItemDto[] = slice.map((row) => {
+    const poster = profiles.get(row.posterId) ?? {
+      id: row.posterId,
+      name: 'Driver',
+      onboardingComplete: false,
+    };
+    const assignee = row.assigneeId ? profiles.get(row.assigneeId) : undefined;
+    return {
+      ...mapDrive(row, viewerId),
+      poster,
+      ...(assignee ? { assignee } : {}),
+    };
+  });
+
   return {
-    items: slice.map((r) => mapDrive(r, viewerId)),
+    items,
     ...(rows.length > limit
       ? { nextCursor: slice[slice.length - 1]?.createdAt.toISOString() }
       : {}),
