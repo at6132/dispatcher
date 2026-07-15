@@ -39,6 +39,7 @@ export const photoKindEnum = pgEnum('photo_kind', [
   'self',
   'interior',
   'exterior',
+  'payment_proof',
 ]);
 
 export const users = pgTable(
@@ -137,6 +138,11 @@ export const drives = pgTable(
     index('drives_status_created_idx').on(t.status, t.createdAt),
     index('drives_poster_idx').on(t.posterId),
     index('drives_assignee_idx').on(t.assigneeId),
+    uniqueIndex('drives_one_active_assignee_uidx')
+      .on(t.assigneeId)
+      .where(
+        sql`${t.assigneeId} IS NOT NULL AND ${t.status} IN ('assigned', 'picked_up')`,
+      ),
   ],
 );
 
@@ -169,6 +175,86 @@ export const applications = pgTable(
   ],
 );
 
+/** Owner favorited another user (dispatcher↔driver; either direction). */
+export const favorites = pgTable(
+  'favorites',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    ownerId: uuid('owner_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    favoriteUserId: uuid('favorite_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('favorites_owner_favorite_uidx').on(t.ownerId, t.favoriteUserId),
+    index('favorites_owner_idx').on(t.ownerId),
+    index('favorites_favorite_user_idx').on(t.favoriteUserId),
+  ],
+);
+
+/**
+ * Per-notification delivery mode.
+ * `favorites` = only when the related user is in the recipient's favorites
+ * (favorited applicant for new applications; favorited poster for new drives / accepts).
+ */
+export const notificationPrefModeEnum = pgEnum('notification_pref_mode', [
+  'off',
+  'all',
+  'favorites',
+]);
+
+export const notificationPreferences = pgTable('notification_preferences', {
+  userId: uuid('user_id')
+    .primaryKey()
+    .references(() => users.id, { onDelete: 'cascade' }),
+  /** Poster: someone applied to your drive. */
+  newApplication: notificationPrefModeEnum('new_application')
+    .notNull()
+    .default('all'),
+  /** Poster: your drive status changed (picked up / completed / cancelled). */
+  driveStatus: notificationPrefModeEnum('drive_status')
+    .notNull()
+    .default('all'),
+  /** Driver: you were accepted for a drive. */
+  applicationAccepted: notificationPrefModeEnum('application_accepted')
+    .notNull()
+    .default('all'),
+  /** Driver: any new drive posted to the board. */
+  newDrivePosted: notificationPrefModeEnum('new_drive_posted')
+    .notNull()
+    .default('all'),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});
+
+export const pushTokens = pgTable(
+  'push_tokens',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    token: text('token').notNull(),
+    platform: text('platform'),
+    updatedAt: timestamp('updated_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('push_tokens_token_uidx').on(t.token),
+    index('push_tokens_user_idx').on(t.userId),
+  ],
+);
+
 export const balances = pgTable(
   'balances',
   {
@@ -186,6 +272,8 @@ export const balances = pgTable(
     status: balanceStatusEnum('status').notNull().default('open'),
     dueSunday: timestamp('due_sunday', { withTimezone: true }).notNull(),
     settledAt: timestamp('settled_at', { withTimezone: true }),
+    /** Optional Zelle / bank confirmation screenshot object key. */
+    settlementProofKey: text('settlement_proof_key'),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
