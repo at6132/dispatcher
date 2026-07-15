@@ -1,10 +1,10 @@
 import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { DriveListItem } from '../api/drives';
 import {
   BottomNav,
-  type AddOrigin,
   type MainTab,
 } from '../components/navigation/BottomNav';
 import { MistBackdrop } from '../theme';
@@ -12,17 +12,19 @@ import { BankScreen } from './BankScreen';
 import { CreateDriveSheet } from './CreateDriveSheet';
 import { HomeScreen } from './HomeScreen';
 import { ManageDriveSheet } from './ManageDriveSheet';
+import { ProfileButton, ProfileScreen } from './ProfileScreen';
 
 /**
  * Authenticated shell after onboarding — Home / Bank + center add.
  */
 export function MainShell() {
+  const insets = useSafeAreaInsets();
   const [tab, setTab] = useState<MainTab>('home');
   const [composeOpen, setComposeOpen] = useState(false);
-  const [addOrigin, setAddOrigin] = useState<AddOrigin | null>(null);
   const [managingDrive, setManagingDrive] = useState<DriveListItem | null>(
     null,
   );
+  const [profileOpen, setProfileOpen] = useState(false);
   const [boardRefresh, setBoardRefresh] = useState(0);
 
   const bumpBoard = () => {
@@ -43,21 +45,18 @@ export function MainShell() {
             <BankScreen />
           )}
         </View>
+        <ProfileButton
+          topInset={insets.top}
+          onPress={() => setProfileOpen(true)}
+        />
         <BottomNav
           active={tab}
           onChange={setTab}
-          onAddPress={(origin) => {
-            setAddOrigin(origin);
-            setComposeOpen(true);
-          }}
+          onAddPress={() => setComposeOpen(true)}
         />
         <CreateDriveSheet
           visible={composeOpen}
-          origin={addOrigin}
-          onClose={() => {
-            setComposeOpen(false);
-            setAddOrigin(null);
-          }}
+          onClose={() => setComposeOpen(false)}
           onCreated={bumpBoard}
         />
         <ManageDriveSheet
@@ -65,6 +64,10 @@ export function MainShell() {
           drive={managingDrive}
           onClose={() => setManagingDrive(null)}
           onChanged={bumpBoard}
+        />
+        <ProfileScreen
+          visible={profileOpen}
+          onClose={() => setProfileOpen(false)}
         />
       </View>
     </MistBackdrop>

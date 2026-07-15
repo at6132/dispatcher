@@ -26,18 +26,10 @@ import {
 
 export type MainTab = 'home' | 'bank';
 
-/** Window coords of the + face — used to warp the compose screen open. */
-export type AddOrigin = {
-  x: number;
-  y: number;
-  width: number;
-  height: number;
-};
-
 type BottomNavProps = {
   active: MainTab;
   onChange: (tab: MainTab) => void;
-  onAddPress?: (origin: AddOrigin) => void;
+  onAddPress?: () => void;
 };
 
 /**
@@ -250,8 +242,7 @@ function NavItem({ label, active, onPress, icon }: NavItemProps) {
   );
 }
 
-function AddButton({ onPress }: { onPress?: (origin: AddOrigin) => void }) {
-  const faceRef = useRef<View>(null);
+function AddButton({ onPress }: { onPress?: () => void }) {
   const scale = useRef(new Animated.Value(1)).current;
 
   const animateTo = (value: number) => {
@@ -262,32 +253,24 @@ function AddButton({ onPress }: { onPress?: (origin: AddOrigin) => void }) {
     }).start();
   };
 
-  const handlePress = () => {
-    faceRef.current?.measureInWindow((x, y, width, height) => {
-      onPress?.({ x, y, width, height });
-    });
-  };
-
   return (
     <Animated.View style={{ transform: [{ scale }] }}>
-      <View ref={faceRef} collapsable={false}>
-        <Pressable
-          accessibilityRole="button"
-          accessibilityLabel="Add"
-          onPress={handlePress}
-          onPressIn={() => animateTo(motion.pressScale)}
-          onPressOut={() => animateTo(1)}
-          style={({ pressed }) => [styles.face, pressed && styles.facePressed]}
-          hitSlop={4}
-        >
-          <Icon
-            icon={Plus}
-            size={PLUS}
-            color={colors.onAccent}
-            strokeWidth={2.6}
-          />
-        </Pressable>
-      </View>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel="Add"
+        onPress={onPress}
+        onPressIn={() => animateTo(motion.pressScale)}
+        onPressOut={() => animateTo(1)}
+        style={({ pressed }) => [styles.face, pressed && styles.facePressed]}
+        hitSlop={4}
+      >
+        <Icon
+          icon={Plus}
+          size={PLUS}
+          color={colors.onAccent}
+          strokeWidth={2.6}
+        />
+      </Pressable>
     </Animated.View>
   );
 }
