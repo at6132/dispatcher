@@ -26,6 +26,7 @@ import {
   updateDrive,
 } from '../services/drives.js';
 import { toPublicProfile } from '../services/auth.js';
+import { listFavoriteUserIds } from '../services/favorites.js';
 
 async function withIdempotency(
   userId: string,
@@ -559,6 +560,14 @@ export const balanceRoutes: FastifyPluginAsync = async (app) => {
   app.post('/:id/settle', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
     if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
+    const body = z
+      .object({
+        settlementProofKey: z.string().min(1).max(500).optional(),
+      })
+      .safeParse(request.body ?? {});
+    if (!body.success) {
+      return sendError(reply, 400, 'Invalid body', 'invalid_body');
+    }
     try {
       await assertClientLimits(request, reply, {
         name: 'balance_settle',
@@ -568,13 +577,20 @@ export const balanceRoutes: FastifyPluginAsync = async (app) => {
         failClosed: true,
       });
       const user = requireUser(request);
-      const balance = await settleBalance(user.id, params.data.id);
+      const balance = await settleBalance(
+        user.id,
+        params.data.id,
+        body.data.settlementProofKey,
+      );
       trackEvent({
         name: 'balance.settle',
         userId: user.id,
         requestId: request.id,
         ip: request.ip,
-        props: { balanceId: params.data.id },
+        props: {
+          balanceId: params.data.id,
+          hasProof: Boolean(body.data.settlementProofKey),
+        },
       });
       return reply.send({
         balance: {
@@ -605,8 +621,18 @@ export const profileRoutes: FastifyPluginAsync = async (app) => {
         userLimit: 90,
         windowSec: 60,
       });
-      const user = await toPublicProfile(params.data.id);
-      return reply.send({ user });
+      const viewer = requireUser(request);
+      const [user, favoriteIds] = await Promise.all([
+        toPublicProfile(params.data.id),
+        listFavoriteUserIds(viewer.id),
+      ]);
+      const isFavorite = favoriteIds.has(params.data.id);
+      return reply.send({
+        user: {
+          ...user,
+          ...(isFavorite ? { isFavorite: true as const } : {}),
+        },
+      });
     } catch (err) {
       if (err instanceof AppError) {
         return sendError(reply, err.statusCode, err.message, err.code);

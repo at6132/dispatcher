@@ -1,6 +1,9 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 
+import { db } from '../db/client.js';
+import { users } from '../db/schema.js';
 import { AppError, sendError } from '../lib/errors.js';
 import { trackEvent } from '../lib/analytics.js';
 import { logDomain, logDomainWarn, shortId } from '../lib/log.js';
@@ -43,6 +46,46 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
         onboardingComplete: dto.onboardingComplete,
         status: dto.status,
         hasProfile: Boolean(dto.onboarding),
+      });
+      return reply.send({ user: dto });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.patch('/', async (request, reply) => {
+    const body = z
+      .object({
+        name: z.string().min(1).max(80),
+      })
+      .safeParse(request.body);
+    if (!body.success) {
+      return sendError(reply, 400, 'Invalid body', 'invalid_body');
+    }
+    try {
+      await assertClientLimits(request, reply, {
+        name: 'me_patch',
+        ipLimit: 30,
+        userLimit: 20,
+        windowSec: 3600,
+        failClosed: true,
+      });
+      const user = requireUser(request);
+      const name = body.data.name.trim();
+      if (name.length < 2) {
+        return sendError(reply, 400, 'Enter a valid name', 'invalid_name');
+      }
+      await db
+        .update(users)
+        .set({ name, updatedAt: new Date() })
+        .where(eq(users.id, user.id));
+      const dto = await toAuthUser(user.id);
+      logDomain(request.log, 'me.patch.ok', {
+        requestId: request.id,
+        userId: shortId(dto.id),
       });
       return reply.send({ user: dto });
     } catch (err) {
@@ -130,7 +173,7 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
   app.post('/photos/presign', async (request, reply) => {
     const body = z
       .object({
-        kind: z.enum(['self', 'interior', 'exterior']),
+        kind: z.enum(['self', 'interior', 'exterior', 'payment_proof']),
         contentType: z.string().max(100),
       })
       .safeParse(request.body);

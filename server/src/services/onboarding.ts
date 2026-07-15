@@ -34,10 +34,12 @@ export type OnboardingInput = {
   vehicleExteriorKey?: string;
 };
 
-async function assertOwnedConfirmedKey(
+export type PhotoKind = 'self' | 'interior' | 'exterior' | 'payment_proof';
+
+export async function assertOwnedConfirmedPhotoKey(
   userId: string,
   key: string | undefined,
-  kind: 'self' | 'interior' | 'exterior',
+  kind: PhotoKind,
 ): Promise<string | undefined> {
   if (!key) return undefined;
   if (key.startsWith('http://') || key.startsWith('https://') || key.includes('..')) {
@@ -97,11 +99,33 @@ export async function saveOnboarding(
   }
   const extraInfo = input.extraInfo?.trim() || undefined;
 
-  const [selfPhotoKey, vehicleInteriorKey, vehicleExteriorKey] = await Promise.all([
-    assertOwnedConfirmedKey(userId, input.selfPhotoKey, 'self'),
-    assertOwnedConfirmedKey(userId, input.vehicleInteriorKey, 'interior'),
-    assertOwnedConfirmedKey(userId, input.vehicleExteriorKey, 'exterior'),
-  ]);
+  const [existing] = await db
+    .select()
+    .from(driverProfiles)
+    .where(eq(driverProfiles.userId, userId))
+    .limit(1);
+
+  // Omit keys to keep existing photos on re-save / profile edit.
+  const [selfPhotoKey, vehicleInteriorKey, vehicleExteriorKey] =
+    await Promise.all([
+      input.selfPhotoKey !== undefined
+        ? assertOwnedConfirmedPhotoKey(userId, input.selfPhotoKey, 'self')
+        : Promise.resolve(existing?.selfPhotoKey ?? undefined),
+      input.vehicleInteriorKey !== undefined
+        ? assertOwnedConfirmedPhotoKey(
+            userId,
+            input.vehicleInteriorKey,
+            'interior',
+          )
+        : Promise.resolve(existing?.vehicleInteriorKey ?? undefined),
+      input.vehicleExteriorKey !== undefined
+        ? assertOwnedConfirmedPhotoKey(
+            userId,
+            input.vehicleExteriorKey,
+            'exterior',
+          )
+        : Promise.resolve(existing?.vehicleExteriorKey ?? undefined),
+    ]);
 
   // Profile + gate flip in one transaction so a successful PUT always means complete.
   await db.transaction(async (tx) => {
@@ -152,7 +176,7 @@ export async function saveOnboarding(
 
 export async function createPhotoPresign(
   userId: string,
-  input: { kind: 'self' | 'interior' | 'exterior'; contentType: string },
+  input: { kind: PhotoKind; contentType: string },
 ) {
   if (!env.s3Enabled) {
     throw new AppError(503, 'Photo storage is not configured', 's3_disabled');
@@ -188,7 +212,7 @@ export async function createPhotoPresign(
 export async function confirmPhoto(
   userId: string,
   input: { uploadId: string },
-): Promise<{ objectKey: string; kind: 'self' | 'interior' | 'exterior' }> {
+): Promise<{ objectKey: string; kind: PhotoKind }> {
   const [row] = await db
     .select()
     .from(photoUploads)

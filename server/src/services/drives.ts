@@ -13,6 +13,20 @@ import { isUniqueViolation, withLock } from '../lib/locks.js';
 import { isValidPhone, nextSundayDeadlineNy, normalizePhone } from '../lib/phone.js';
 import { getRedis } from '../lib/redis.js';
 import { toAuthUser, toPublicProfile } from './auth.js';
+import { AppError } from '../lib/errors.js';
+import { normalizePhone, isValidPhone } from '../lib/phone.js';
+import { getRedis } from '../lib/redis.js';
+import { withLock } from '../lib/locks.js';
+import { nextSundayDeadlineNy } from '../lib/time.js';
+import { assertOwnedConfirmedPhotoKey } from './photos.js';
+import { listFavoriteUserIds } from './favorites.js';
+import {
+  notifyApplicationAccepted,
+  notifyDriveStatusChange,
+  notifyNewApplication,
+  notifyNewDrivePosted,
+} from './pushNotifications.js';
+import { assertOwnedConfirmedPhotoKey } from './onboarding.js';
 
 function canSeePassenger(drive: {
   posterId: string;
@@ -29,6 +43,27 @@ function canSeePassenger(drive: {
     return true;
   }
   return false;
+}
+
+/** Assignee on assigned/picked_up — one job at a time. */
+async function findActiveAssignment(
+  tx: Pick<typeof db, 'select'>,
+  driverId: string,
+  excludeDriveId?: string,
+) {
+  const conditions = [
+    eq(drives.assigneeId, driverId),
+    inArray(drives.status, ['assigned', 'picked_up']),
+  ];
+  if (excludeDriveId) {
+    conditions.push(ne(drives.id, excludeDriveId));
+  }
+  const [row] = await tx
+    .select({ id: drives.id })
+    .from(drives)
+    .where(and(...conditions))
+    .limit(1);
+  return row ?? null;
 }
 
 export type DriveDto = {
@@ -55,6 +90,8 @@ export type DriveDto = {
   completedAt?: string;
   /** Viewer's application on this drive, if any. */
   viewerApplicationStatus?: 'pending' | 'accepted' | 'rejected' | 'cleared';
+  /** True when the viewer favorited the poster. */
+  posterIsFavorite?: boolean;
 };
 
 /** Board list row — drive + public party profiles for the feed. */
@@ -70,6 +107,7 @@ function mapDrive(
   row: typeof drives.$inferSelect,
   viewerId: string,
   viewerApplicationStatus?: DriveDto['viewerApplicationStatus'],
+  posterIsFavorite?: boolean,
 ): DriveDto {
   const unlocked = canSeePassenger(row, viewerId);
   return {
@@ -97,6 +135,7 @@ function mapDrive(
     ...(viewerApplicationStatus
       ? { viewerApplicationStatus }
       : {}),
+    ...(posterIsFavorite ? { posterIsFavorite: true } : {}),
   };
 }
 
@@ -388,6 +427,7 @@ export async function listDrives(
 
   const viewerAppByDrive = new Map<string, NonNullable<DriveDto['viewerApplicationStatus']>>();
   const assigneeCoordsByDrive = new Map<string, { lat: number; lng: number }>();
+  const favoriteIds = await listFavoriteUserIds(viewerId);
   if (slice.length > 0) {
     const driveIds = slice.map((r) => r.id);
     const viewerApps = await db
@@ -446,11 +486,18 @@ export async function listDrives(
       id: row.posterId,
       name: 'Driver',
       onboardingComplete: false,
+      completedDrivesCount: 0,
     };
     const assignee = row.assigneeId ? profiles.get(row.assigneeId) : undefined;
     const coords = assigneeCoordsByDrive.get(row.id);
+    const posterIsFavorite = favoriteIds.has(row.posterId);
     return {
-      ...mapDrive(row, viewerId, viewerAppByDrive.get(row.id)),
+      ...mapDrive(
+        row,
+        viewerId,
+        viewerAppByDrive.get(row.id),
+        posterIsFavorite,
+      ),
       poster,
       ...(assignee ? { assignee } : {}),
       ...(coords
@@ -458,6 +505,16 @@ export async function listDrives(
         : {}),
     };
   });
+
+  // Favorited posters float to the top of the open board (stable within page).
+  if (query.status === 'open' || (!query.status && !query.completed)) {
+    items.sort((a, b) => {
+      const fav =
+        Number(Boolean(b.posterIsFavorite)) - Number(Boolean(a.posterIsFavorite));
+      if (fav !== 0) return fav;
+      return b.createdAt.localeCompare(a.createdAt);
+    });
+  }
 
   return {
     items,
@@ -472,19 +529,23 @@ export async function getDrive(viewerId: string, driveId: string): Promise<Drive
   if (!row) throw new AppError(404, 'Drive not found', 'drive_not_found');
 
   const isParty = row.posterId === viewerId || row.assigneeId === viewerId;
-  const viewerApplicationStatus = await loadViewerApplicationStatus(viewerId, driveId);
+  const [viewerApplicationStatus, favoriteIds] = await Promise.all([
+    loadViewerApplicationStatus(viewerId, driveId),
+    listFavoriteUserIds(viewerId),
+  ]);
+  const posterIsFavorite = favoriteIds.has(row.posterId);
   // Open board is public to authenticated users; assigned/completed only to parties
   // (completed also visible on public completed feed, but detail still party-or-completed)
   if (row.status === 'open') {
-    return mapDrive(row, viewerId, viewerApplicationStatus);
+    return mapDrive(row, viewerId, viewerApplicationStatus, posterIsFavorite);
   }
   if (row.status === 'completed' && !row.hiddenByPoster) {
-    return mapDrive(row, viewerId, viewerApplicationStatus);
+    return mapDrive(row, viewerId, viewerApplicationStatus, posterIsFavorite);
   }
   if (!isParty) {
     throw new AppError(404, 'Drive not found', 'drive_not_found');
   }
-  return mapDrive(row, viewerId, viewerApplicationStatus);
+  return mapDrive(row, viewerId, viewerApplicationStatus, posterIsFavorite);
 }
 
 export async function applyToDrive(
@@ -533,6 +594,15 @@ export async function applyToDrive(
           403,
           'Your vehicle doesn’t match this drive (class or seats).',
           'vehicle_mismatch',
+        );
+      }
+
+      const busy = await findActiveAssignment(tx, driverId);
+      if (busy) {
+        throw new AppError(
+          409,
+          'Finish your current job before applying to another.',
+          'driver_busy',
         );
       }
 
@@ -633,32 +703,46 @@ export async function listApplications(posterId: string, driveId: string) {
     throw new AppError(403, 'Only the poster can view applications', 'forbidden');
   }
 
-  const rows = await db
-    .select({
-      application: applications,
-      user: users,
-      profile: driverProfiles,
-    })
-    .from(applications)
-    .innerJoin(users, eq(applications.driverId, users.id))
-    .leftJoin(driverProfiles, eq(driverProfiles.userId, users.id))
-    .where(eq(applications.driveId, driveId))
-    .orderBy(desc(applications.createdAt));
+  const [rows, favoriteIds] = await Promise.all([
+    db
+      .select({
+        application: applications,
+        user: users,
+        profile: driverProfiles,
+      })
+      .from(applications)
+      .innerJoin(users, eq(applications.driverId, users.id))
+      .leftJoin(driverProfiles, eq(driverProfiles.userId, users.id))
+      .where(eq(applications.driveId, driveId))
+      .orderBy(desc(applications.createdAt)),
+    listFavoriteUserIds(posterId),
+  ]);
 
-  return Promise.all(
+  const items = await Promise.all(
     rows.map(async (r) => {
       const profile = await toPublicProfile(r.user.id);
+      const isFavorite = favoriteIds.has(r.user.id);
       return {
         id: r.application.id,
         status: r.application.status,
         lat: r.application.lat ? Number(r.application.lat) : undefined,
         lng: r.application.lng ? Number(r.application.lng) : undefined,
         createdAt: r.application.createdAt.toISOString(),
+        ...(isFavorite ? { isFavorite: true as const } : {}),
         // Poster-only context: driver phone is needed to coordinate after accept UX
         driver: { ...profile, phone: r.user.phone },
       };
     }),
   );
+
+  // Favorited applicants first, then newest.
+  items.sort((a, b) => {
+    const fav = Number(Boolean(b.isFavorite)) - Number(Boolean(a.isFavorite));
+    if (fav !== 0) return fav;
+    return b.createdAt.localeCompare(a.createdAt);
+  });
+
+  return items;
 }
 
 export async function acceptApplication(
@@ -716,6 +800,15 @@ export async function acceptApplication(
         throw new AppError(404, 'Application not found', 'application_not_found');
       }
 
+      const busy = await findActiveAssignment(tx, app.driverId, driveId);
+      if (busy) {
+        throw new AppError(
+          409,
+          'This driver is already on another job',
+          'driver_busy',
+        );
+      }
+
       const [claimed] = await tx
         .update(applications)
         .set({ status: 'accepted', updatedAt: new Date() })
@@ -727,6 +820,7 @@ export async function acceptApplication(
         throw new AppError(409, 'Application already handled', 'application_conflict');
       }
 
+      // Same drive: reject other pending applicants
       await tx
         .update(applications)
         .set({ status: 'rejected', updatedAt: new Date() })
@@ -738,16 +832,40 @@ export async function acceptApplication(
           ),
         );
 
+      // Cross-drive: rescind this driver's other pending applications
+      await tx
+        .update(applications)
+        .set({ status: 'cleared', updatedAt: new Date() })
+        .where(
+          and(
+            eq(applications.driverId, app.driverId),
+            ne(applications.driveId, driveId),
+            eq(applications.status, 'pending'),
+          ),
+        );
+
       // Conditional status transition — second accept loses
-      const [updated] = await tx
-        .update(drives)
-        .set({
-          status: 'assigned',
-          assigneeId: app.driverId,
-          updatedAt: new Date(),
-        })
-        .where(and(eq(drives.id, driveId), eq(drives.status, 'open')))
-        .returning();
+      let updated;
+      try {
+        [updated] = await tx
+          .update(drives)
+          .set({
+            status: 'assigned',
+            assigneeId: app.driverId,
+            updatedAt: new Date(),
+          })
+          .where(and(eq(drives.id, driveId), eq(drives.status, 'open')))
+          .returning();
+      } catch (err) {
+        if (isUniqueViolation(err)) {
+          throw new AppError(
+            409,
+            'This driver is already on another job',
+            'driver_busy',
+          );
+        }
+        throw err;
+      }
       if (!updated) {
         throw new AppError(409, 'Drive is not open', 'drive_not_open');
       }
@@ -965,7 +1083,17 @@ export async function hideDrive(posterId: string, driveId: string): Promise<Driv
   return mapDrive(drive, posterId);
 }
 
-export async function settleBalance(posterId: string, balanceId: string) {
+export async function settleBalance(
+  posterId: string,
+  balanceId: string,
+  settlementProofKey?: string,
+) {
+  const proofKey = await assertOwnedConfirmedPhotoKey(
+    posterId,
+    settlementProofKey,
+    'payment_proof',
+  );
+
   return withLock(`balance:${balanceId}:settle`, async () =>
     db.transaction(async (tx) => {
       const [balance] = await tx
@@ -983,7 +1111,11 @@ export async function settleBalance(posterId: string, balanceId: string) {
 
       const [updated] = await tx
         .update(balances)
-        .set({ status: 'settled', settledAt: new Date() })
+        .set({
+          status: 'settled',
+          settledAt: new Date(),
+          ...(proofKey ? { settlementProofKey: proofKey } : {}),
+        })
         .where(and(eq(balances.id, balanceId), eq(balances.status, 'open')))
         .returning();
       if (!updated) {

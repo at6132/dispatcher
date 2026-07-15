@@ -1,9 +1,9 @@
-import { and, eq, isNull, gt } from 'drizzle-orm';
+import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 
 import { env } from '../config/env.js';
 import { db } from '../db/client.js';
-import { driverProfiles, refreshTokens, users } from '../db/schema.js';
+import { driverProfiles, drives, refreshTokens, users } from '../db/schema.js';
 import {
   hashPassword,
   sha256,
@@ -26,6 +26,8 @@ export type AuthUserDto = {
   phone: string;
   name: string;
   onboardingComplete: boolean;
+  /** Completed jobs where this user was poster or assignee. */
+  completedDrivesCount: number;
   onboarding?: {
     vehicleClass: 'sedan' | 'suv' | 'large_suv' | 'minivan' | 'sprinter';
     vehicleType: string;
@@ -65,6 +67,7 @@ export type PublicProfileDto = {
   id: string;
   name: string;
   onboardingComplete: boolean;
+  completedDrivesCount: number;
   onboarding?: {
     vehicleClass: 'sedan' | 'suv' | 'large_suv' | 'minivan' | 'sprinter';
     vehicleType: string;
@@ -77,6 +80,20 @@ export type PublicProfileDto = {
   };
 };
 
+/** Jobs marked completed where the user was poster or assignee. */
+export async function countCompletedDrives(userId: string): Promise<number> {
+  const [row] = await db
+    .select({ c: sql<number>`count(*)::int` })
+    .from(drives)
+    .where(
+      and(
+        eq(drives.status, 'completed'),
+        or(eq(drives.posterId, userId), eq(drives.assigneeId, userId)),
+      ),
+    );
+  return Number(row?.c ?? 0);
+}
+
 /** Safe for other drivers — no phone, zelle, or lock status. */
 export async function toPublicProfile(userId: string): Promise<PublicProfileDto> {
   const full = await toAuthUser(userId);
@@ -84,6 +101,7 @@ export async function toPublicProfile(userId: string): Promise<PublicProfileDto>
     id: full.id,
     name: full.name,
     onboardingComplete: full.onboardingComplete,
+    completedDrivesCount: full.completedDrivesCount,
     ...(full.onboarding
       ? {
           onboarding: {
@@ -119,11 +137,14 @@ export async function toAuthUser(userId: string): Promise<AuthUserDto> {
     .where(eq(driverProfiles.userId, userId))
     .limit(1);
 
+  const completedDrivesCount = await countCompletedDrives(userId);
+
   const dto: AuthUserDto = {
     id: user.id,
     phone: user.phone,
     name: user.name,
     onboardingComplete: user.onboardingComplete,
+    completedDrivesCount,
     status: user.status,
   };
 
