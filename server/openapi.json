@@ -173,7 +173,7 @@
     "/v1/drives": {
       "get": {
         "security": [{ "bearerAuth": [] }],
-        "summary": "List drives. status=open|active|history|assigned|mine; completed=true for public completed feed. Items include poster (and assignee when present).",
+        "summary": "List drives. status=open|active|history|assigned|mine; completed=true for public completed feed. Items include poster (and assignee when present). Open board: favorited posters float to top with posterIsFavorite.",
         "responses": { "200": { "description": "OK" } }
       },
       "post": {
@@ -192,7 +192,7 @@
     "/v1/drives/{id}/applications": {
       "get": {
         "security": [{ "bearerAuth": [] }],
-        "summary": "List applicants (poster only)",
+        "summary": "List applicants (poster only). Favorited drivers first with isFavorite.",
         "responses": { "200": { "description": "OK" } }
       },
       "post": {
@@ -239,7 +239,7 @@
     "/v1/balances/{id}/settle": {
       "post": {
         "security": [{ "bearerAuth": [] }],
-        "summary": "Poster marks balance settled",
+        "summary": "Poster marks balance settled (optional settlementProofKey from payment_proof upload)",
         "responses": { "200": { "description": "OK" } }
       }
     },
@@ -248,6 +248,25 @@
         "security": [{ "bearerAuth": [] }],
         "summary": "Public driver profile",
         "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/v1/favorites": {
+      "get": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "List users the current user has favorited",
+        "responses": { "200": { "description": "OK" } }
+      },
+      "post": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Favorite a user (dispatcher↔driver). Body: { userId }",
+        "responses": { "201": { "description": "Created" } }
+      }
+    },
+    "/v1/favorites/{userId}": {
+      "delete": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Unfavorite a user",
+        "responses": { "204": { "description": "No content" } }
       }
     }
   }
