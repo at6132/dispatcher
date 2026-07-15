@@ -129,4 +129,25 @@ export const adminAuthRoutes: FastifyPluginAsync = async (app) => {
       loginIp: session.ip,
     });
   });
+
+  /** Lightweight public status for debugging Telegram 2FA (no secrets). */
+  app.get('/debug', async (_request, reply) => {
+    const { getTelegramAdminWorkerDebug } = await import(
+      '../../workers/telegramAdmin.js'
+    );
+    const { countPendingAdminChallenges } = await import(
+      '../../services/adminAuth.js'
+    );
+    return reply.send({
+      adminEnabled: env.adminEnabled,
+      telegramConfigured: Boolean(
+        env.TELEGRAM_BOT_TOKEN || env.TELEGRAM_BOT_ID,
+      ),
+      approvedChatCount: (env.TELEGRAM_CHAT_IDS ?? '')
+        .split(/[,\s]+/)
+        .filter(Boolean).length,
+      pendingChallenges: await countPendingAdminChallenges(),
+      worker: getTelegramAdminWorkerDebug(),
+    });
+  });
 };

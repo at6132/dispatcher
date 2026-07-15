@@ -14,6 +14,7 @@ function toUser(user: AuthUserApi): AuthUser {
     phone: user.phone,
     name: user.name,
     onboardingComplete: user.onboardingComplete,
+    completedDrivesCount: user.completedDrivesCount ?? 0,
     ...(user.onboarding ? { onboarding: user.onboarding } : {}),
   };
 }
@@ -186,6 +187,18 @@ export async function saveOnboarding(
     });
     return { ...user, onboardingComplete: true };
   }
+  return user;
+}
+
+export async function updateProfileName(name: string): Promise<AuthUser> {
+  const trimmed = name.trim();
+  logger.info('session', 'profile_name.start', { nameLen: trimmed.length });
+  const data = await apiFetch<MeResponse>('/v1/me', {
+    method: 'PATCH',
+    body: JSON.stringify({ name: trimmed }),
+  });
+  const user = toUser(data.user);
+  logger.info('session', 'profile_name.ok', { userId: user.id });
   return user;
 }
 

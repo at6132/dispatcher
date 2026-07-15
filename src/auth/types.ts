@@ -37,6 +37,8 @@ export type AuthUser = {
   phone: string;
   name: string;
   onboardingComplete: boolean;
+  /** Completed jobs where this user was poster or assignee. */
+  completedDrivesCount?: number;
   onboarding?: OnboardingProfile;
 };
 

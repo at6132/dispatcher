@@ -108,7 +108,7 @@ export function DriveDetailScreen({
     drive?.status === 'picked_up' && (isPoster || isAssignee);
 
   const onApply = async () => {
-    if (!drive) return;
+    if (!drive || applying) return;
     setActionError(null);
     setApplying(true);
     try {
@@ -117,7 +117,13 @@ export function DriveDetailScreen({
       await load();
       onChanged?.();
     } catch (err) {
-      setActionError(mapApiError(err).message);
+      const mapped = mapApiError(err);
+      if (mapped.code === 'already_applied') {
+        await load();
+        onChanged?.();
+      } else {
+        setActionError(mapped.message);
+      }
     } finally {
       setApplying(false);
     }

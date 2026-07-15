@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   FlatList,
   Pressable,
@@ -20,6 +21,7 @@ import {
   applyToDrive,
   listDrives,
   markDrivePickedUp,
+  requestDriveCancel,
   type Drive,
   type DriveBoard,
   type DriveListItem,
@@ -118,12 +120,15 @@ export function HomeScreen({
   });
   const [applyingId, setApplyingId] = useState<string | null>(null);
   const [appliedIds, setAppliedIds] = useState<Set<string>>(() => new Set());
+  const applyingIdsRef = useRef<Set<string>>(new Set());
   const [applyError, setApplyError] = useState<string | null>(null);
   const [completingDrive, setCompletingDrive] = useState<DriveListItem | null>(
     null,
   );
   const [pickingUpId, setPickingUpId] = useState<string | null>(null);
   const [pickupError, setPickupError] = useState<string | null>(null);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   const loadBoard = useCallback(
     async (board: DriveBoard, mode: 'initial' | 'refresh' = 'initial') => {
@@ -146,11 +151,20 @@ export function HomeScreen({
           : null;
         const items =
           board === 'open'
-            ? result.items.filter(
-                (d) =>
-                  d.status === 'open' &&
-                  driverMatchesOpenDrive(capacity, d, user?.id),
-              )
+            ? result.items
+                .filter(
+                  (d) =>
+                    d.status === 'open' &&
+                    driverMatchesOpenDrive(capacity, d, user?.id),
+                )
+                .slice()
+                .sort((a, b) => {
+                  const fav =
+                    Number(Boolean(b.posterIsFavorite)) -
+                    Number(Boolean(a.posterIsFavorite));
+                  if (fav !== 0) return fav;
+                  return b.createdAt.localeCompare(a.createdAt);
+                })
             : result.items;
         setBoards((prev) => ({
           ...prev,
@@ -163,13 +177,16 @@ export function HomeScreen({
           },
         }));
         if (board === 'open') {
+          // Only clear local “Applied” when the server says cleared/rejected.
+          // Do not wipe on null — a stale in-flight refresh can land after
+          // apply and would flip Applied back to Apply.
           setAppliedIds((prev) => {
             const next = new Set(prev);
             for (const item of items) {
               const status = item.viewerApplicationStatus;
               if (status === 'pending' || status === 'accepted') {
                 next.add(item.id);
-              } else if (status === 'cleared' || status == null) {
+              } else if (status === 'cleared' || status === 'rejected') {
                 next.delete(item.id);
               }
             }
@@ -272,21 +289,57 @@ export function HomeScreen({
         )
       : thumbTranslate;
 
+  const markApplied = (driveId: string) => {
+    setAppliedIds((prev) => new Set(prev).add(driveId));
+    setBoards((prev) => ({
+      ...prev,
+      open: {
+        ...prev.open,
+        items: prev.open.items.map((d) =>
+          d.id === driveId
+            ? { ...d, viewerApplicationStatus: 'pending' as const }
+            : d,
+        ),
+      },
+    }));
+  };
+
   const onApply = async (driveId: string) => {
+    if (applyingIdsRef.current.has(driveId)) return;
+    applyingIdsRef.current.add(driveId);
     setApplyError(null);
     setApplyingId(driveId);
+    // Optimistic — Applied must not wait on GPS / network, and must not
+    // bounce back if a stale board refresh finishes mid-request.
+    markApplied(driveId);
     try {
       const coords = await getCachedCoordinate();
       await applyToDrive(driveId, coords ?? undefined);
-      setAppliedIds((prev) => new Set(prev).add(driveId));
     } catch (err) {
       const mapped = mapApiError(err);
       if (mapped.code === 'already_applied') {
-        setAppliedIds((prev) => new Set(prev).add(driveId));
+        markApplied(driveId);
       } else {
+        setAppliedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(driveId);
+          return next;
+        });
+        setBoards((prev) => ({
+          ...prev,
+          open: {
+            ...prev.open,
+            items: prev.open.items.map((d) =>
+              d.id === driveId
+                ? { ...d, viewerApplicationStatus: undefined }
+                : d,
+            ),
+          },
+        }));
         setApplyError(mapped.message);
       }
     } finally {
+      applyingIdsRef.current.delete(driveId);
       setApplyingId(null);
     }
   };
@@ -310,6 +363,42 @@ export function HomeScreen({
     } finally {
       setPickingUpId(null);
     }
+  };
+
+  const onRequestCancel = (driveId: string) => {
+    Alert.alert(
+      'Cancel this ride?',
+      'The dispatcher will get a notification and must approve before the ride is cancelled.',
+      [
+        { text: 'Keep ride', style: 'cancel' },
+        {
+          text: 'Request cancel',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setCancelError(null);
+              setCancellingId(driveId);
+              try {
+                const updated = await requestDriveCancel(driveId);
+                setBoards((prev) => ({
+                  ...prev,
+                  active: {
+                    ...prev.active,
+                    items: prev.active.items.map((d) =>
+                      d.id === driveId ? { ...d, ...updated } : d,
+                    ),
+                  },
+                }));
+              } catch (err) {
+                setCancelError(mapApiError(err).message);
+              } finally {
+                setCancellingId(null);
+              }
+            })();
+          },
+        },
+      ],
+    );
   };
 
   const onDriveCompleted = (driveId: string, updated: Drive) => {
@@ -373,7 +462,7 @@ export function HomeScreen({
       status === 'accepted';
     const applyAgain = !applied && status === 'cleared';
     const canApply =
-      board === 'open' && status !== 'rejected';
+      board === 'open' && !applied && status !== 'rejected';
     return (
       <DriveCard
         drive={item}
@@ -394,9 +483,13 @@ export function HomeScreen({
         onComplete={
           board === 'active' ? () => setCompletingDrive(item) : undefined
         }
+        onRequestCancel={
+          board === 'active' ? () => onRequestCancel(item.id) : undefined
+        }
         applying={applyingId === item.id}
         applied={applied}
         pickingUp={pickingUpId === item.id}
+        cancelling={cancellingId === item.id}
         applyAgain={applyAgain}
         showMap={opts?.showMap}
       />
@@ -432,6 +525,8 @@ export function HomeScreen({
           {
             paddingTop: insets.top + space.lg,
             paddingHorizontal: space.xl,
+            // Room for the floating profile PFP (40px) + gap
+            paddingRight: space.xl + 40 + space.md,
           },
         ]}
       >
@@ -525,9 +620,9 @@ export function HomeScreen({
                   refreshControl={refresh}
                   ListEmptyComponent={listEmpty(b, state)}
                   ListHeaderComponent={
-                    pickupError ? (
+                    pickupError || cancelError ? (
                       <Text style={styles.applyError} accessibilityRole="alert">
-                        {pickupError}
+                        {pickupError ?? cancelError}
                       </Text>
                     ) : null
                   }
@@ -660,15 +755,18 @@ const styles = StyleSheet.create({
     height: space.md,
   },
   sectionHeader: {
-    gap: space.xs,
-    paddingBottom: space.sm,
+    gap: space.sm,
+    paddingBottom: space.md,
   },
   sectionHeaderFollow: {
-    paddingTop: space.md,
+    paddingTop: space.xxl,
   },
   sectionTitle: {
-    ...type.label,
-    color: colors.faint,
+    fontFamily: fonts.sansSemi,
+    fontSize: 16,
+    letterSpacing: 0.6,
+    lineHeight: 22,
+    color: colors.muted,
     textTransform: 'uppercase',
     paddingLeft: space.xs,
   },

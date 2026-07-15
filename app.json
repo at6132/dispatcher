@@ -57,6 +57,14 @@
           "isAndroidBackgroundLocationEnabled": true
         }
       ],
+      [
+        "expo-notifications",
+        {
+          "color": "#B0C2CC",
+          "defaultChannel": "default",
+          "enableBackgroundRemoteNotifications": false
+        }
+      ],
       "expo-secure-store"
     ]
   }

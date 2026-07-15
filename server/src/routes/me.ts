@@ -1,6 +1,9 @@
 import type { FastifyPluginAsync } from 'fastify';
+import { eq } from 'drizzle-orm';
 import { z } from 'zod';
 
+import { db } from '../db/client.js';
+import { users } from '../db/schema.js';
 import { AppError, sendError } from '../lib/errors.js';
 import { trackEvent } from '../lib/analytics.js';
 import { logDomain, logDomainWarn, shortId } from '../lib/log.js';
@@ -12,6 +15,14 @@ import {
   createPhotoPresign,
   saveOnboarding,
 } from '../services/onboarding.js';
+import {
+  getNotificationPrefs,
+  updateNotificationPrefs,
+} from '../services/notificationPrefs.js';
+import {
+  deletePushToken,
+  upsertPushToken,
+} from '../services/pushNotifications.js';
 
 const vehicleClass = z.enum([
   'sedan',
@@ -20,6 +31,8 @@ const vehicleClass = z.enum([
   'minivan',
   'sprinter',
 ]);
+
+const notificationPrefMode = z.enum(['off', 'all', 'favorites']);
 
 export const meRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', requireAuth);
@@ -43,6 +56,46 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
         onboardingComplete: dto.onboardingComplete,
         status: dto.status,
         hasProfile: Boolean(dto.onboarding),
+      });
+      return reply.send({ user: dto });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.patch('/', async (request, reply) => {
+    const body = z
+      .object({
+        name: z.string().min(1).max(80),
+      })
+      .safeParse(request.body);
+    if (!body.success) {
+      return sendError(reply, 400, 'Invalid body', 'invalid_body');
+    }
+    try {
+      await assertClientLimits(request, reply, {
+        name: 'me_patch',
+        ipLimit: 30,
+        userLimit: 20,
+        windowSec: 3600,
+        failClosed: true,
+      });
+      const user = requireUser(request);
+      const name = body.data.name.trim();
+      if (name.length < 2) {
+        return sendError(reply, 400, 'Enter a valid name', 'invalid_name');
+      }
+      await db
+        .update(users)
+        .set({ name, updatedAt: new Date() })
+        .where(eq(users.id, user.id));
+      const dto = await toAuthUser(user.id);
+      logDomain(request.log, 'me.patch.ok', {
+        requestId: request.id,
+        userId: shortId(dto.id),
       });
       return reply.send({ user: dto });
     } catch (err) {
@@ -130,7 +183,7 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
   app.post('/photos/presign', async (request, reply) => {
     const body = z
       .object({
-        kind: z.enum(['self', 'interior', 'exterior']),
+        kind: z.enum(['self', 'interior', 'exterior', 'payment_proof']),
         contentType: z.string().max(100),
       })
       .safeParse(request.body);
@@ -198,6 +251,117 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
           userId: shortId(request.user?.id),
           code: err.code,
         });
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.get('/notifications', async (request, reply) => {
+    try {
+      await assertClientLimits(request, reply, {
+        name: 'me_notifications_get',
+        ipLimit: 60,
+        userLimit: 40,
+        windowSec: 60,
+      });
+      const user = requireUser(request);
+      const preferences = await getNotificationPrefs(user.id);
+      return reply.send({ preferences });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.patch('/notifications', async (request, reply) => {
+    const body = z
+      .object({
+        newApplication: notificationPrefMode.optional(),
+        driveStatus: z.enum(['off', 'all']).optional(),
+        applicationAccepted: notificationPrefMode.optional(),
+        newDrivePosted: notificationPrefMode.optional(),
+        cancelRequest: notificationPrefMode.optional(),
+        applicationCleared: notificationPrefMode.optional(),
+      })
+      .safeParse(request.body);
+    if (!body.success) {
+      return sendError(reply, 400, 'Invalid body', 'invalid_body');
+    }
+    try {
+      await assertClientLimits(request, reply, {
+        name: 'me_notifications_patch',
+        ipLimit: 30,
+        userLimit: 20,
+        windowSec: 3600,
+        failClosed: true,
+      });
+      const user = requireUser(request);
+      const preferences = await updateNotificationPrefs(user.id, body.data);
+      logDomain(request.log, 'me.notifications.patch', {
+        requestId: request.id,
+        userId: shortId(user.id),
+      });
+      return reply.send({ preferences });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.put('/push-token', async (request, reply) => {
+    const body = z
+      .object({
+        token: z.string().min(8).max(512),
+        platform: z.enum(['ios', 'android', 'web']).optional(),
+      })
+      .safeParse(request.body);
+    if (!body.success) {
+      return sendError(reply, 400, 'Invalid body', 'invalid_body');
+    }
+    try {
+      await assertClientLimits(request, reply, {
+        name: 'me_push_token_put',
+        ipLimit: 30,
+        userLimit: 20,
+        windowSec: 3600,
+        failClosed: true,
+      });
+      const user = requireUser(request);
+      await upsertPushToken(user.id, body.data.token, body.data.platform);
+      logDomain(request.log, 'me.push_token.put', {
+        requestId: request.id,
+        userId: shortId(user.id),
+        platform: body.data.platform,
+      });
+      return reply.status(204).send();
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.delete('/push-token', async (request, reply) => {
+    const body = z
+      .object({
+        token: z.string().min(8).max(512),
+      })
+      .safeParse(request.body);
+    if (!body.success) {
+      return sendError(reply, 400, 'Invalid body', 'invalid_body');
+    }
+    try {
+      const user = requireUser(request);
+      await deletePushToken(user.id, body.data.token);
+      return reply.status(204).send();
+    } catch (err) {
+      if (err instanceof AppError) {
         return sendError(reply, err.statusCode, err.message, err.code);
       }
       throw err;

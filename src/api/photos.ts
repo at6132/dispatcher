@@ -1,6 +1,8 @@
 import { logger } from '../debug/logger';
 import { apiFetch, getApiBaseUrl } from './client';
 
+export type PhotoKind = 'self' | 'interior' | 'exterior' | 'payment_proof';
+
 type PresignResponse = {
   uploadId: string;
   objectKey: string;
@@ -11,7 +13,7 @@ type PresignResponse = {
 
 type ConfirmResponse = {
   objectKey: string;
-  kind: 'self' | 'interior' | 'exterior';
+  kind: PhotoKind;
 };
 
 const UPLOAD_TIMEOUT_MS = 25_000;
@@ -37,9 +39,58 @@ async function fetchWithTimeout(
   }
 }
 
+async function putPhotoToPresigned(
+  uri: string,
+  kind: PhotoKind,
+): Promise<string> {
+  if (!uri) throw new Error('Photo missing');
+  if (!getApiBaseUrl()) throw new Error('Photo upload unavailable');
+
+  const contentType = guessContentType(uri);
+  const presign = await apiFetch<PresignResponse>('/v1/me/photos/presign', {
+    method: 'POST',
+    body: JSON.stringify({ kind, contentType }),
+  });
+
+  const fileRes = await fetchWithTimeout(uri, undefined, UPLOAD_TIMEOUT_MS);
+  const blob = await fileRes.blob();
+  let put: Response;
+  try {
+    put = await fetchWithTimeout(
+      presign.uploadUrl,
+      {
+        method: 'PUT',
+        headers: { 'Content-Type': contentType },
+        body: blob,
+      },
+      UPLOAD_TIMEOUT_MS,
+    );
+  } catch (err) {
+    logger.warn('photos', 's3_put.network_error', {
+      kind,
+      err: err instanceof Error ? err.message : String(err),
+    });
+    throw new Error('Photo upload failed');
+  }
+  if (!put.ok) {
+    logger.warn('photos', 's3_put.http_error', {
+      kind,
+      status: put.status,
+    });
+    throw new Error('Photo upload failed');
+  }
+
+  const confirmed = await apiFetch<ConfirmResponse>('/v1/me/photos/confirm', {
+    method: 'POST',
+    body: JSON.stringify({ uploadId: presign.uploadId }),
+  });
+  return confirmed.objectKey;
+}
+
 /**
  * If uri is already remote/http or API unset, return undefined (skip key).
  * Otherwise presign → PUT → confirm and return object key.
+ * Soft-fails for onboarding — never blocks if upload fails.
  */
 export async function uploadLocalPhotoIfNeeded(
   uri: string,
@@ -51,53 +102,9 @@ export async function uploadLocalPhotoIfNeeded(
 
   logger.info('photos', 'upload.start', { kind });
   try {
-    const contentType = guessContentType(uri);
-    const presign = await apiFetch<PresignResponse>('/v1/me/photos/presign', {
-      method: 'POST',
-      body: JSON.stringify({ kind, contentType }),
-    });
-    logger.debug('photos', 'presign.ok', {
-      kind,
-      uploadId: presign.uploadId,
-    });
-
-    const fileRes = await fetchWithTimeout(uri, undefined, UPLOAD_TIMEOUT_MS);
-    const blob = await fileRes.blob();
-    let put: Response;
-    try {
-      put = await fetchWithTimeout(
-        presign.uploadUrl,
-        {
-          method: 'PUT',
-          headers: { 'Content-Type': contentType },
-          body: blob,
-        },
-        UPLOAD_TIMEOUT_MS,
-      );
-    } catch (err) {
-      logger.warn('photos', 's3_put.network_error', {
-        kind,
-        err: err instanceof Error ? err.message : String(err),
-      });
-      throw new Error('Photo upload failed');
-    }
-    if (!put.ok) {
-      logger.warn('photos', 's3_put.http_error', {
-        kind,
-        status: put.status,
-      });
-      throw new Error('Photo upload failed');
-    }
-
-    const confirmed = await apiFetch<ConfirmResponse>('/v1/me/photos/confirm', {
-      method: 'POST',
-      body: JSON.stringify({ uploadId: presign.uploadId }),
-    });
-    logger.info('photos', 'upload.ok', {
-      kind,
-      objectKey: confirmed.objectKey,
-    });
-    return confirmed.objectKey;
+    const objectKey = await putPhotoToPresigned(uri, kind);
+    logger.info('photos', 'upload.ok', { kind, objectKey });
+    return objectKey;
   } catch (err) {
     // Photos are optional — never block onboarding if upload fails
     const code = (err as { code?: string; requestId?: string }).code;
@@ -110,4 +117,16 @@ export async function uploadLocalPhotoIfNeeded(
     });
     return undefined;
   }
+}
+
+/** Upload a settlement confirmation screenshot. Throws on failure. */
+export async function uploadPaymentProof(uri: string): Promise<string> {
+  if (!uri) throw new Error('Add a screenshot first');
+  if (uri.startsWith('http://') || uri.startsWith('https://')) {
+    throw new Error('Invalid screenshot');
+  }
+  logger.info('photos', 'upload.start', { kind: 'payment_proof' });
+  const objectKey = await putPhotoToPresigned(uri, 'payment_proof');
+  logger.info('photos', 'upload.ok', { kind: 'payment_proof', objectKey });
+  return objectKey;
 }

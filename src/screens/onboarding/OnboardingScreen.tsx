@@ -40,12 +40,17 @@ import {
   isLocationAccessReady,
   type LocationAccessState,
 } from '../../components/ui/LocationAccessPrompt';
+import {
+  NotificationAccessPrompt,
+  isNotificationAccessReady,
+  type NotificationAccessState,
+} from '../../components/ui/NotificationAccessPrompt';
 import { RollerWheel } from '../../components/ui/RollerWheel';
 import { TextField } from '../../components/ui/TextField';
 import { logger } from '../../debug/logger';
 import { MistBackdrop, colors, fonts, space, type } from '../../theme';
 
-type Step = 0 | 1 | 2 | 3 | 4;
+type Step = 0 | 1 | 2 | 3 | 4 | 5;
 
 const STEP_COPY: Record<
   Step,
@@ -71,6 +76,11 @@ const STEP_COPY: Record<
     body: 'Needed to match you with rides.',
   },
   4: {
+    lead: 'Allow',
+    trail: 'notifications',
+    body: 'So you hear about jobs and balances.',
+  },
+  5: {
     lead: 'Zelle',
     trail: 'info',
     body: 'If you plan on posting rides, please provide this information.',
@@ -127,6 +137,8 @@ export function OnboardingScreen() {
   const [photoAccess, setPhotoAccess] = useState<PhotoAccessState>('unknown');
   const [locationAccess, setLocationAccess] =
     useState<LocationAccessState>('unknown');
+  const [notificationAccess, setNotificationAccess] =
+    useState<NotificationAccessState>('unknown');
 
   const vehicleErrors = validateOnboardingVehicle({
     vehicleClass,
@@ -194,7 +206,7 @@ export function OnboardingScreen() {
         setExtraInfo,
         setZelle,
       });
-      setStep(4);
+      setStep(5);
       if (autoRetryRef.current) return;
       autoRetryRef.current = true;
       // One silent retry — same path as Finish, no wizard redo.
@@ -259,8 +271,21 @@ export function OnboardingScreen() {
       return;
     }
 
+    if (step === 4) {
+      // Optional — continue even if denied (Apple-friendly).
+      setFormError(null);
+      setSubmitted(false);
+      setStep(5);
+      logger.info('onboarding', 'step', {
+        from: 4,
+        to: 5,
+        notificationAccess,
+      });
+      return;
+    }
+
     if (Object.keys(zelleErrors).length) {
-      logger.info('onboarding', 'step4.validation_fail', { zelleErrors });
+      logger.info('onboarding', 'step5.validation_fail', { zelleErrors });
       return;
     }
     if (!vehicleClass) {
@@ -323,7 +348,7 @@ export function OnboardingScreen() {
               <View style={styles.top} pointerEvents="box-none">
                 <Pressable onPress={Keyboard.dismiss} accessible={false}>
                   <View style={styles.progressRow}>
-                    {[0, 1, 2, 3, 4].map((n) => (
+                    {[0, 1, 2, 3, 4, 5].map((n) => (
                       <View
                         key={n}
                         style={[
@@ -451,6 +476,12 @@ export function OnboardingScreen() {
                 ) : null}
 
                 {step === 4 ? (
+                  <NotificationAccessPrompt
+                    onAccessChange={setNotificationAccess}
+                  />
+                ) : null}
+
+                {step === 5 ? (
                   <TextField
                     label="Zelle email or phone"
                     value={zelle}
@@ -480,7 +511,7 @@ export function OnboardingScreen() {
                 loading={submitting}
                 disabled={submitting}
                 accessibilityLabel={
-                  step === 4 ? 'Finish onboarding' : 'Continue'
+                  step === 5 ? 'Finish onboarding' : 'Continue'
                 }
               >
                 {step === 1
@@ -492,10 +523,14 @@ export function OnboardingScreen() {
                       ? 'Continue'
                       : 'Allow location to continue'
                     : step === 4
-                      ? zelle.trim()
-                        ? 'Finish'
-                        : 'Skip'
-                      : 'Continue'}
+                      ? isNotificationAccessReady(notificationAccess)
+                        ? 'Continue'
+                        : 'Skip for now'
+                      : step === 5
+                        ? zelle.trim()
+                          ? 'Finish'
+                          : 'Skip'
+                        : 'Continue'}
               </Button>
 
               {submitting ? (

@@ -36,9 +36,12 @@ export type DriveCardProps = {
   onPickedUp?: () => void;
   /** Active board — complete after pickup (picked_up). */
   onComplete?: () => void;
+  /** Active board — assignee requests cancel (needs poster approve). */
+  onRequestCancel?: () => void;
   applying?: boolean;
   applied?: boolean;
   pickingUp?: boolean;
+  cancelling?: boolean;
   /** After poster clears submissions — CTA label becomes Apply again. */
   applyAgain?: boolean;
   /** Dispatched section — map of driver apply location + status chip. */
@@ -193,9 +196,11 @@ export function DriveCard({
   onManage,
   onPickedUp,
   onComplete,
+  onRequestCancel,
   applying = false,
   applied = false,
   pickingUp = false,
+  cancelling = false,
   applyAgain = false,
   showMap = false,
 }: DriveCardProps) {
@@ -260,10 +265,16 @@ export function DriveCard({
     onPickedUp != null && drive.status === 'assigned' && isAssignee;
   const showComplete =
     onComplete != null && drive.status === 'picked_up' && isAssignee;
+  const cancelPending = Boolean(drive.cancelRequestedAt);
+  const showRequestCancel =
+    onRequestCancel != null &&
+    isAssignee &&
+    (drive.status === 'assigned' || drive.status === 'picked_up');
   const showManagePrimary =
     onManage != null && isPoster && !showPickedUp && !showComplete;
   const showManageSecondary =
     onManage != null && isPoster && (showPickedUp || showComplete);
+  const manageLabel = cancelPending ? 'Review cancel' : 'Manage';
 
   const passengerPhone = drive.passengerPhone?.trim();
   const passengerAddress = drive.address?.trim();
@@ -357,9 +368,11 @@ export function DriveCard({
       style={[
         styles.badge,
         drive.status === 'open' && styles.badgeOpen,
-        drive.status === 'assigned' && styles.badgeAssigned,
-        drive.status === 'picked_up' && styles.badgePickedUp,
+        drive.status === 'assigned' && !cancelPending && styles.badgeAssigned,
+        drive.status === 'picked_up' && !cancelPending && styles.badgePickedUp,
+        cancelPending && styles.badgeCancelPending,
         drive.status === 'completed' && styles.badgeCompleted,
+        drive.status === 'cancelled' && styles.badgeCancelled,
         placement === 'onMap' && styles.badgeOnMap,
         placement === 'sheet' && styles.badgeOnSheet,
       ]}
@@ -368,24 +381,37 @@ export function DriveCard({
         style={[
           styles.badgeLabel,
           drive.status === 'open' && styles.badgeLabelOpen,
-          drive.status === 'assigned' && styles.badgeLabelAssigned,
-          drive.status === 'picked_up' && styles.badgeLabelPickedUp,
+          drive.status === 'assigned' &&
+            !cancelPending &&
+            styles.badgeLabelAssigned,
+          drive.status === 'picked_up' &&
+            !cancelPending &&
+            styles.badgeLabelPickedUp,
+          cancelPending && styles.badgeLabelCancelPending,
           drive.status === 'completed' && styles.badgeLabelCompleted,
+          drive.status === 'cancelled' && styles.badgeLabelCancelled,
           (placement === 'onMap' || placement === 'sheet') &&
             styles.badgeLabelLifted,
         ]}
       >
-        {status}
+        {cancelPending ? 'Cancel requested' : status}
       </Text>
     </View>
   );
 
   return (
     <View
-      style={[styles.card, showMap && styles.cardWithMap]}
+      style={[
+        styles.card,
+        showMap && styles.cardWithMap,
+        drive.posterIsFavorite && styles.cardFavorite,
+      ]}
       accessibilityRole="summary"
-      accessibilityLabel={`${drive.routeText}, ${status}`}
+      accessibilityLabel={`${drive.routeText}, ${status}${drive.posterIsFavorite ? ', favorite dispatcher' : ''}`}
     >
+      {drive.posterIsFavorite ? (
+        <Text style={styles.favoriteLabel}>Favorite</Text>
+      ) : null}
       {showMap ? (
         <Pressable
           style={styles.mapWrap}
@@ -577,14 +603,14 @@ export function DriveCard({
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Picked up"
-                disabled={pickingUp}
+                disabled={pickingUp || cancelPending}
                 onPress={onPickedUp}
                 onPressIn={() => animatePress(motion.pressScale)}
                 onPressOut={() => animatePress(1)}
                 style={({ pressed }) => [
                   styles.applyBtn,
-                  pickingUp && styles.applyBtnBusy,
-                  pressed && !pickingUp && styles.applyBtnPressed,
+                  (pickingUp || cancelPending) && styles.applyBtnBusy,
+                  pressed && !pickingUp && !cancelPending && styles.applyBtnPressed,
                 ]}
               >
                 {pickingUp ? (
@@ -594,6 +620,31 @@ export function DriveCard({
                 )}
               </Pressable>
             </Animated.View>
+            {showRequestCancel ? (
+              cancelPending ? (
+                <Text style={styles.cancelPendingHint}>
+                  Waiting for dispatcher to approve cancel
+                </Text>
+              ) : (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Request cancel"
+                  disabled={cancelling}
+                  onPress={onRequestCancel}
+                  style={({ pressed }) => [
+                    styles.cancelBtn,
+                    cancelling && styles.applyBtnBusy,
+                    pressed && !cancelling && styles.cancelBtnPressed,
+                  ]}
+                >
+                  {cancelling ? (
+                    <ActivityIndicator color={colors.danger} />
+                  ) : (
+                    <Text style={styles.cancelLabel}>Cancel ride</Text>
+                  )}
+                </Pressable>
+              )
+            ) : null}
             {showManageSecondary ? (
               <Pressable
                 accessibilityRole="button"
@@ -604,7 +655,7 @@ export function DriveCard({
                   pressed && styles.manageBtnPressed,
                 ]}
               >
-                <Text style={styles.manageLabel}>Manage</Text>
+                <Text style={styles.manageLabel}>{manageLabel}</Text>
               </Pressable>
             ) : null}
           </View>
@@ -614,28 +665,55 @@ export function DriveCard({
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel="Complete drive"
+                disabled={cancelPending}
                 onPress={onComplete}
                 onPressIn={() => animatePress(motion.pressScale)}
                 onPressOut={() => animatePress(1)}
                 style={({ pressed }) => [
                   styles.applyBtn,
-                  pressed && styles.applyBtnPressed,
+                  cancelPending && styles.applyBtnBusy,
+                  pressed && !cancelPending && styles.applyBtnPressed,
                 ]}
               >
                 <Text style={styles.applyLabel}>Complete drive</Text>
               </Pressable>
             </Animated.View>
+            {showRequestCancel ? (
+              cancelPending ? (
+                <Text style={styles.cancelPendingHint}>
+                  Waiting for dispatcher to approve cancel
+                </Text>
+              ) : (
+                <Pressable
+                  accessibilityRole="button"
+                  accessibilityLabel="Request cancel"
+                  disabled={cancelling}
+                  onPress={onRequestCancel}
+                  style={({ pressed }) => [
+                    styles.cancelBtn,
+                    cancelling && styles.applyBtnBusy,
+                    pressed && !cancelling && styles.cancelBtnPressed,
+                  ]}
+                >
+                  {cancelling ? (
+                    <ActivityIndicator color={colors.danger} />
+                  ) : (
+                    <Text style={styles.cancelLabel}>Cancel ride</Text>
+                  )}
+                </Pressable>
+              )
+            ) : null}
             {showManageSecondary ? (
               <Pressable
                 accessibilityRole="button"
-                accessibilityLabel="Manage"
+                accessibilityLabel={manageLabel}
                 onPress={onManage}
                 style={({ pressed }) => [
                   styles.manageBtn,
                   pressed && styles.manageBtnPressed,
                 ]}
               >
-                <Text style={styles.manageLabel}>Manage</Text>
+                <Text style={styles.manageLabel}>{manageLabel}</Text>
               </Pressable>
             ) : null}
           </View>
@@ -643,7 +721,7 @@ export function DriveCard({
           <Animated.View style={{ transform: [{ scale: pressScale }] }}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel="Manage"
+              accessibilityLabel={manageLabel}
               onPress={onManage}
               onPressIn={() => animatePress(motion.pressScale)}
               onPressOut={() => animatePress(1)}
@@ -652,7 +730,7 @@ export function DriveCard({
                 pressed && styles.manageBtnPressed,
               ]}
             >
-              <Text style={styles.manageLabel}>Manage</Text>
+              <Text style={styles.manageLabel}>{manageLabel}</Text>
             </Pressable>
           </Animated.View>
         ) : showApply ? (
@@ -780,6 +858,17 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.glassBorder,
     backgroundColor: colors.glass,
+  },
+  cardFavorite: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentMuted,
+  },
+  favoriteLabel: {
+    ...type.label,
+    color: colors.accent,
+    textTransform: 'uppercase',
+    paddingTop: space.sm,
+    paddingHorizontal: space.md,
   },
   cardWithMap: {
     overflow: 'hidden',
@@ -925,6 +1014,12 @@ const styles = StyleSheet.create({
   badgeCompleted: {
     backgroundColor: 'rgba(127, 168, 148, 0.22)',
   },
+  badgeCancelPending: {
+    backgroundColor: 'rgba(208, 138, 138, 0.2)',
+  },
+  badgeCancelled: {
+    backgroundColor: 'rgba(208, 138, 138, 0.16)',
+  },
   badgeLabel: {
     ...type.label,
     color: colors.accent,
@@ -941,6 +1036,12 @@ const styles = StyleSheet.create({
   },
   badgeLabelCompleted: {
     color: colors.success,
+  },
+  badgeLabelCancelPending: {
+    color: colors.danger,
+  },
+  badgeLabelCancelled: {
+    color: colors.danger,
   },
   footer: {
     gap: space.sm,
@@ -1034,6 +1135,31 @@ const styles = StyleSheet.create({
     fontSize: 15,
     letterSpacing: -0.1,
     color: colors.ink,
+  },
+  cancelBtn: {
+    minHeight: 44,
+    borderRadius: radius.control,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: space.xl,
+    backgroundColor: 'transparent',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(208, 138, 138, 0.45)',
+  },
+  cancelBtnPressed: {
+    opacity: 0.85,
+  },
+  cancelLabel: {
+    fontFamily: fonts.sansSemi,
+    fontSize: 14,
+    letterSpacing: -0.1,
+    color: colors.danger,
+  },
+  cancelPendingHint: {
+    ...type.caption,
+    color: colors.muted,
+    textAlign: 'center',
+    paddingHorizontal: space.sm,
   },
   successWrap: {
     position: 'relative',

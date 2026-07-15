@@ -121,6 +121,13 @@ export function mapApiError(
             'Your vehicle doesn’t match this drive — same class, and enough seats.',
           code: err.code,
         };
+      case 'driver_busy':
+        return {
+          message:
+            err.message ||
+            'Finish your current job before taking or applying to another.',
+          code: err.code,
+        };
       case 'create_failed':
       case 'internal':
         return {

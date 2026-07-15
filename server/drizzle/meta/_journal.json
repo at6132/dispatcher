@@ -43,6 +43,48 @@
       "when": 1784310000000,
       "tag": "0005_admin_analytics",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784400000000,
+      "tag": "0006_one_active_job",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784500000000,
+      "tag": "0007_settlement_proof",
+      "breakpoints": true
+    },
+    {
+      "idx": 8,
+      "version": "7",
+      "when": 1784600000000,
+      "tag": "0008_favorites",
+      "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1784700000000,
+      "tag": "0009_notification_prefs",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1784800000000,
+      "tag": "0010_cancel_request",
+      "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1784900000000,
+      "tag": "0011_application_cleared_notif",
+      "breakpoints": true
     }
   ]
 }

@@ -21,11 +21,14 @@ import {
   listBalances,
   listDrives,
   markDrivePickedUp,
+  requestDriveCancel,
+  respondDriveCancel,
   settleBalance,
   unassignDrive,
   updateDrive,
 } from '../services/drives.js';
 import { toPublicProfile } from '../services/auth.js';
+import { listFavoriteUserIds } from '../services/favorites.js';
 
 async function withIdempotency(
   userId: string,
@@ -419,6 +422,112 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
+  app.post('/:id/cancel-request', async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
+    try {
+      const user = requireUser(request);
+      await assertClientLimits(request, reply, {
+        name: 'drive_cancel_request',
+        ipLimit: 30,
+        userLimit: 20,
+        windowSec: 3600,
+        failClosed: true,
+      });
+      const result = await withIdempotency(
+        user.id,
+        request as never,
+        reply as never,
+        async () => {
+          const drive = await requestDriveCancel(user.id, params.data.id);
+          return { status: 200, body: { drive } };
+        },
+      );
+      logDomain(request.log, 'drives.cancel_request.ok', {
+        requestId: request.id,
+        userId: shortId(user.id),
+        driveId: shortId(params.data.id),
+      });
+      trackEvent({
+        name: 'drive.cancel_request',
+        userId: user.id,
+        requestId: request.id,
+        ip: request.ip,
+        props: { driveId: params.data.id },
+      });
+      return reply.status(result.status).send(result.body);
+    } catch (err) {
+      if (err instanceof AppError) {
+        logDomainWarn(request.log, 'drives.cancel_request.fail', {
+          requestId: request.id,
+          code: err.code,
+        });
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.post('/:id/cancel-respond', async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
+    const body = z
+      .object({ approve: z.boolean() })
+      .safeParse(request.body);
+    if (!body.success) {
+      return sendError(reply, 400, 'Invalid body', 'invalid_body');
+    }
+    try {
+      const user = requireUser(request);
+      await assertClientLimits(request, reply, {
+        name: 'drive_cancel_respond',
+        ipLimit: 60,
+        userLimit: 40,
+        windowSec: 3600,
+        failClosed: true,
+      });
+      const result = await withIdempotency(
+        user.id,
+        request as never,
+        reply as never,
+        async () => {
+          const drive = await respondDriveCancel(
+            user.id,
+            params.data.id,
+            body.data.approve,
+          );
+          return { status: 200, body: { drive } };
+        },
+      );
+      logDomain(request.log, 'drives.cancel_respond.ok', {
+        requestId: request.id,
+        userId: shortId(user.id),
+        driveId: shortId(params.data.id),
+        approve: body.data.approve,
+      });
+      trackEvent({
+        name: 'drive.cancel_respond',
+        userId: user.id,
+        requestId: request.id,
+        ip: request.ip,
+        props: {
+          driveId: params.data.id,
+          approve: body.data.approve,
+        },
+      });
+      return reply.status(result.status).send(result.body);
+    } catch (err) {
+      if (err instanceof AppError) {
+        logDomainWarn(request.log, 'drives.cancel_respond.fail', {
+          requestId: request.id,
+          code: err.code,
+        });
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
   app.post('/:id/picked-up', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
     if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
@@ -546,8 +655,8 @@ export const balanceRoutes: FastifyPluginAsync = async (app) => {
         windowSec: 60,
       });
       const user = requireUser(request);
-      const items = await listBalances(user.id);
-      return reply.send({ items });
+      const { items, totalProfitCents } = await listBalances(user.id);
+      return reply.send({ items, totalProfitCents });
     } catch (err) {
       if (err instanceof AppError) {
         return sendError(reply, err.statusCode, err.message, err.code);
@@ -559,6 +668,14 @@ export const balanceRoutes: FastifyPluginAsync = async (app) => {
   app.post('/:id/settle', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
     if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
+    const body = z
+      .object({
+        settlementProofKey: z.string().min(1).max(500).optional(),
+      })
+      .safeParse(request.body ?? {});
+    if (!body.success) {
+      return sendError(reply, 400, 'Invalid body', 'invalid_body');
+    }
     try {
       await assertClientLimits(request, reply, {
         name: 'balance_settle',
@@ -568,13 +685,20 @@ export const balanceRoutes: FastifyPluginAsync = async (app) => {
         failClosed: true,
       });
       const user = requireUser(request);
-      const balance = await settleBalance(user.id, params.data.id);
+      const balance = await settleBalance(
+        user.id,
+        params.data.id,
+        body.data.settlementProofKey,
+      );
       trackEvent({
         name: 'balance.settle',
         userId: user.id,
         requestId: request.id,
         ip: request.ip,
-        props: { balanceId: params.data.id },
+        props: {
+          balanceId: params.data.id,
+          hasProof: Boolean(body.data.settlementProofKey),
+        },
       });
       return reply.send({
         balance: {
@@ -605,8 +729,18 @@ export const profileRoutes: FastifyPluginAsync = async (app) => {
         userLimit: 90,
         windowSec: 60,
       });
-      const user = await toPublicProfile(params.data.id);
-      return reply.send({ user });
+      const viewer = requireUser(request);
+      const [user, favoriteIds] = await Promise.all([
+        toPublicProfile(params.data.id),
+        listFavoriteUserIds(viewer.id),
+      ]);
+      const isFavorite = favoriteIds.has(params.data.id);
+      return reply.send({
+        user: {
+          ...user,
+          ...(isFavorite ? { isFavorite: true as const } : {}),
+        },
+      });
     } catch (err) {
       if (err instanceof AppError) {
         return sendError(reply, err.statusCode, err.message, err.code);

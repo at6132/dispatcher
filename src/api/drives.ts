@@ -14,6 +14,9 @@ export type PublicProfile = {
   id: string;
   name: string;
   onboardingComplete: boolean;
+  completedDrivesCount?: number;
+  /** True when the viewer has favorited this user. */
+  isFavorite?: boolean;
   onboarding?: {
     vehicleClass: VehicleClass;
     vehicleType: string;
@@ -50,7 +53,11 @@ export type Drive = {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  /** When set, assignee requested cancel — poster must approve/deny. */
+  cancelRequestedAt?: string;
   viewerApplicationStatus?: ApplicationStatus;
+  /** True when the viewer favorited the poster. */
+  posterIsFavorite?: boolean;
 };
 
 export type CreateDriveInput = {
@@ -97,6 +104,7 @@ function asListItem(raw: Drive & { poster?: PublicProfile; assignee?: PublicProf
       id: raw.posterId,
       name: 'Driver',
       onboardingComplete: false,
+      completedDrivesCount: 0,
     },
     ...(raw.assignee ? { assignee: raw.assignee } : {}),
   };
@@ -151,6 +159,8 @@ export type DriveApplication = {
   lat?: number;
   lng?: number;
   createdAt: string;
+  /** True when the poster favorited this applicant. */
+  isFavorite?: boolean;
   driver: PublicProfile & { phone?: string };
 };
 
@@ -225,4 +235,28 @@ export async function completeDrive(
       body: JSON.stringify(input),
     },
   );
+}
+
+/** Assignee requests cancel — poster must approve. */
+export async function requestDriveCancel(driveId: string): Promise<Drive> {
+  const data = await apiFetch<{ drive: Drive }>(
+    `/v1/drives/${driveId}/cancel-request`,
+    { method: 'POST', body: JSON.stringify({}) },
+  );
+  return data.drive;
+}
+
+/** Poster approves or denies a pending cancel request. */
+export async function respondDriveCancel(
+  driveId: string,
+  approve: boolean,
+): Promise<Drive> {
+  const data = await apiFetch<{ drive: Drive }>(
+    `/v1/drives/${driveId}/cancel-respond`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ approve }),
+    },
+  );
+  return data.drive;
 }

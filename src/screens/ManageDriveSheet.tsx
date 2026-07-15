@@ -18,6 +18,7 @@ import {
   acceptApplication,
   clearApplications,
   listApplications,
+  respondDriveCancel,
   updateDrive,
   type DriveApplication,
   type DriveListItem,
@@ -40,6 +41,7 @@ import { LoadingHint } from '../components/ui/LoadingHint';
 import { NumberStepper } from '../components/ui/NumberStepper';
 import { TextField } from '../components/ui/TextField';
 import { MistBackdrop, colors, fonts, radius, space, type } from '../theme';
+import { PublicProfileScreen } from './PublicProfileScreen';
 
 type ManageTab = 'applicants' | 'status' | 'details';
 
@@ -108,6 +110,10 @@ export function ManageDriveSheet({
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [viewingDriverId, setViewingDriverId] = useState<string | null>(null);
+  const [viewingSeed, setViewingSeed] = useState<
+    DriveApplication['driver'] | null
+  >(null);
 
   const [title, setTitle] = useState('');
   const [phone, setPhone] = useState('');
@@ -119,6 +125,9 @@ export function ManageDriveSheet({
   const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [cancelResponding, setCancelResponding] = useState<
+    'approve' | 'deny' | null
+  >(null);
 
   const fillDetails = useCallback((d: DriveListItem) => {
     setTitle(d.routeText);
@@ -163,6 +172,8 @@ export function ManageDriveSheet({
       setApps([]);
       setAcceptingId(null);
       setClearing(false);
+      setViewingDriverId(null);
+      setViewingSeed(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- visibility-driven
   }, [visible, drive?.id]);
@@ -178,7 +189,7 @@ export function ManageDriveSheet({
   }, [visible, drive, tab]);
 
   const requestClose = () => {
-    if (saving || acceptingId || clearing) return;
+    if (saving || acceptingId || clearing || cancelResponding) return;
     Keyboard.dismiss();
     onClose();
   };
@@ -257,6 +268,36 @@ export function ManageDriveSheet({
     }
   };
 
+  const onCancelRespond = async (approve: boolean) => {
+    const target = drive ?? active;
+    if (!target) return;
+    setActionError(null);
+    setCancelResponding(approve ? 'approve' : 'deny');
+    try {
+      const updated = await respondDriveCancel(target.id, approve);
+      setActive((prev) =>
+        prev
+          ? {
+              ...prev,
+              ...updated,
+              poster: prev.poster,
+              assignee: prev.assignee,
+              assigneeLat: prev.assigneeLat,
+              assigneeLng: prev.assigneeLng,
+            }
+          : prev,
+      );
+      onChanged();
+      if (approve) {
+        onClose();
+      }
+    } catch (err) {
+      setActionError(mapApiError(err).message);
+    } finally {
+      setCancelResponding(null);
+    }
+  };
+
   const titleError =
     submitted && title.trim().length < 2
       ? 'Enter a title like SF to Monticello'
@@ -267,13 +308,23 @@ export function ManageDriveSheet({
   const tripError =
     submitted && !tripType ? 'Pick one way or round trip' : undefined;
 
-  const busy = saving || acceptingId != null || clearing;
-  const sheetDrive = drive ?? active;
+  const busy =
+    saving || acceptingId != null || clearing || cancelResponding != null;
+  // Prefer local snapshot so optimistic cancel respond updates stick.
+  const sheetDrive = active ?? drive;
 
   if (!sheetDrive || (!visible && !mounted)) return null;
 
   const isOpen = sheetDrive.status === 'open';
-  const pendingApps = apps.filter((a) => a.status === 'pending');
+  const cancelPending = Boolean(sheetDrive.cancelRequestedAt);
+  const pendingApps = apps
+    .filter((a) => a.status === 'pending')
+    .slice()
+    .sort((a, b) => {
+      const fav = Number(Boolean(b.isFavorite)) - Number(Boolean(a.isFavorite));
+      if (fav !== 0) return fav;
+      return b.createdAt.localeCompare(a.createdAt);
+    });
   const openSubmissions = apps.filter(
     (a) => a.status === 'pending' || a.status === 'rejected',
   );
@@ -306,6 +357,7 @@ export function ManageDriveSheet({
       : null;
 
   return (
+    <>
     <Modal
       visible
       transparent
@@ -438,27 +490,45 @@ export function ManageDriveSheet({
                         const accepting = acceptingId === app.id;
                         return (
                           <View key={app.id} style={styles.appRow}>
-                            <DriverCard
-                              name={app.driver.name}
-                              vehicleType={
-                                app.driver.onboarding?.vehicleType
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={`Open ${app.driver.name}'s profile`}
+                              onPress={() => {
+                                setViewingSeed({
+                                  ...app.driver,
+                                  ...(app.isFavorite
+                                    ? { isFavorite: true as const }
+                                    : {}),
+                                });
+                                setViewingDriverId(app.driver.id);
+                              }}
+                              style={({ pressed }) =>
+                                pressed ? styles.cardPressed : undefined
                               }
-                              phone={
-                                app.driver.phone
-                                  ? formatPhoneDisplay(app.driver.phone)
-                                  : undefined
-                              }
-                              detail={applicantDetail(app)}
-                              photoUri={app.driver.onboarding?.selfPhotoUri}
-                              vehicleInteriorUri={
-                                app.driver.onboarding?.vehicleInteriorUri
-                              }
-                              vehicleExteriorUri={
-                                app.driver.onboarding?.vehicleExteriorUri
-                              }
-                              coordinate={coord}
-                              showMap={Boolean(coord)}
-                            />
+                            >
+                              <DriverCard
+                                name={app.driver.name}
+                                vehicleType={
+                                  app.driver.onboarding?.vehicleType
+                                }
+                                phone={
+                                  app.driver.phone
+                                    ? formatPhoneDisplay(app.driver.phone)
+                                    : undefined
+                                }
+                                detail={applicantDetail(app)}
+                                photoUri={app.driver.onboarding?.selfPhotoUri}
+                                vehicleInteriorUri={
+                                  app.driver.onboarding?.vehicleInteriorUri
+                                }
+                                vehicleExteriorUri={
+                                  app.driver.onboarding?.vehicleExteriorUri
+                                }
+                                coordinate={coord}
+                                showMap={Boolean(coord)}
+                                highlighted={Boolean(app.isFavorite)}
+                              />
+                            </Pressable>
                             <Button
                               loading={accepting}
                               disabled={busy}
@@ -496,7 +566,9 @@ export function ManageDriveSheet({
                   <View style={styles.statusCard}>
                     <Text style={styles.statusEyebrow}>Ride status</Text>
                     <Text style={styles.statusValue}>
-                      {driveStatusLabel(sheetDrive.status)}
+                      {cancelPending
+                        ? 'Cancel requested'
+                        : driveStatusLabel(sheetDrive.status)}
                     </Text>
                     {sheetDrive.status === 'completed' &&
                     sheetDrive.costCents != null ? (
@@ -505,6 +577,42 @@ export function ManageDriveSheet({
                       </Text>
                     ) : null}
                   </View>
+
+                  {cancelPending &&
+                  (sheetDrive.status === 'assigned' ||
+                    sheetDrive.status === 'picked_up') ? (
+                    <View style={styles.cancelBanner}>
+                      <Text style={styles.cancelTitle}>
+                        Driver wants to cancel
+                      </Text>
+                      <Text style={styles.cancelBody}>
+                        Approve to end the ride, or keep it if they should stay
+                        on the job.
+                      </Text>
+                      <View style={styles.cancelActions}>
+                        <Button
+                          loading={cancelResponding === 'approve'}
+                          disabled={busy}
+                          onPress={() => void onCancelRespond(true)}
+                        >
+                          Approve cancel
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          loading={cancelResponding === 'deny'}
+                          disabled={busy}
+                          onPress={() => void onCancelRespond(false)}
+                        >
+                          Keep ride
+                        </Button>
+                      </View>
+                      {actionError ? (
+                        <Text style={styles.formError} accessibilityRole="alert">
+                          {actionError}
+                        </Text>
+                      ) : null}
+                    </View>
+                  ) : null}
 
                   {profitCents != null ? (
                     <View style={styles.profitCard}>
@@ -521,32 +629,50 @@ export function ManageDriveSheet({
                   {statusDriver ? (
                     <View style={styles.statusDriver}>
                       <Text style={styles.statusEyebrow}>Driver</Text>
-                      <DriverCard
-                        name={statusDriver.name}
-                        vehicleType={statusDriver.onboarding?.vehicleType}
-                        phone={
-                          acceptedApp?.driver.phone
-                            ? formatPhoneDisplay(acceptedApp.driver.phone)
-                            : undefined
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Open ${statusDriver.name}'s profile`}
+                        onPress={() => {
+                          setViewingSeed({
+                            ...statusDriver,
+                            ...(acceptedApp?.isFavorite
+                              ? { isFavorite: true as const }
+                              : {}),
+                          });
+                          setViewingDriverId(statusDriver.id);
+                        }}
+                        style={({ pressed }) =>
+                          pressed ? styles.cardPressed : undefined
                         }
-                        detail={applicantDetail(
-                          acceptedApp ?? {
-                            id: '',
-                            status: 'accepted',
-                            createdAt: '',
-                            driver: statusDriver,
-                          },
-                        )}
-                        photoUri={statusDriver.onboarding?.selfPhotoUri}
-                        vehicleInteriorUri={
-                          statusDriver.onboarding?.vehicleInteriorUri
-                        }
-                        vehicleExteriorUri={
-                          statusDriver.onboarding?.vehicleExteriorUri
-                        }
-                        coordinate={statusCoord}
-                        showMap
-                      />
+                      >
+                        <DriverCard
+                          name={statusDriver.name}
+                          vehicleType={statusDriver.onboarding?.vehicleType}
+                          phone={
+                            acceptedApp?.driver.phone
+                              ? formatPhoneDisplay(acceptedApp.driver.phone)
+                              : undefined
+                          }
+                          detail={applicantDetail(
+                            acceptedApp ?? {
+                              id: '',
+                              status: 'accepted',
+                              createdAt: '',
+                              driver: statusDriver,
+                            },
+                          )}
+                          photoUri={statusDriver.onboarding?.selfPhotoUri}
+                          vehicleInteriorUri={
+                            statusDriver.onboarding?.vehicleInteriorUri
+                          }
+                          vehicleExteriorUri={
+                            statusDriver.onboarding?.vehicleExteriorUri
+                          }
+                          coordinate={statusCoord}
+                          showMap
+                          highlighted={Boolean(acceptedApp?.isFavorite)}
+                        />
+                      </Pressable>
                     </View>
                   ) : (
                     <View style={styles.emptyBlock}>
@@ -678,6 +804,46 @@ export function ManageDriveSheet({
         </View>
       </View>
     </Modal>
+    <PublicProfileScreen
+      visible={viewingDriverId != null}
+      userId={viewingDriverId}
+      seed={viewingSeed}
+      onClose={() => {
+        setViewingDriverId(null);
+        setViewingSeed(null);
+      }}
+      onFavoriteChange={(driverId, isFavorite) => {
+        setApps((prev) =>
+          prev.map((a) =>
+            a.driver.id === driverId
+              ? {
+                  ...a,
+                  ...(isFavorite
+                    ? { isFavorite: true as const }
+                    : { isFavorite: undefined }),
+                  driver: {
+                    ...a.driver,
+                    ...(isFavorite
+                      ? { isFavorite: true as const }
+                      : { isFavorite: undefined }),
+                  },
+                }
+              : a,
+          ),
+        );
+        setViewingSeed((prev) =>
+          prev && prev.id === driverId
+            ? {
+                ...prev,
+                ...(isFavorite
+                  ? { isFavorite: true as const }
+                  : { isFavorite: undefined }),
+              }
+            : prev,
+        );
+      }}
+    />
+    </>
   );
 }
 
@@ -798,6 +964,9 @@ const styles = StyleSheet.create({
   appRow: {
     gap: space.sm,
   },
+  cardPressed: {
+    opacity: 0.88,
+  },
   clearBlock: {
     gap: space.xs,
     paddingTop: space.sm,
@@ -838,6 +1007,28 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.glassBorder,
     backgroundColor: colors.glass,
+  },
+  cancelBanner: {
+    gap: space.sm,
+    padding: space.md,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(208, 138, 138, 0.4)',
+    backgroundColor: 'rgba(208, 138, 138, 0.1)',
+  },
+  cancelTitle: {
+    fontFamily: fonts.sansSemi,
+    fontSize: 16,
+    letterSpacing: -0.2,
+    color: colors.ink,
+  },
+  cancelBody: {
+    ...type.caption,
+    color: colors.muted,
+  },
+  cancelActions: {
+    gap: space.sm,
+    marginTop: space.xs,
   },
   profitCard: {
     gap: space.xs,

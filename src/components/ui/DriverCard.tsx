@@ -22,6 +22,8 @@ export type DriverCardProps = {
   coordinate?: DriverCoordinate | null;
   /** Hide map (e.g. home screen) */
   showMap?: boolean;
+  /** Quiet steel wash — favorited applicant. */
+  highlighted?: boolean;
 };
 
 const AVATAR = 48;
@@ -43,13 +45,21 @@ export function DriverCard({
   detail,
   coordinate,
   showMap = true,
+  highlighted = false,
 }: DriverCardProps) {
   const initial = (name.trim().charAt(0) || '?').toUpperCase();
   const hasVehiclePhotos = Boolean(vehicleInteriorUri || vehicleExteriorUri);
   const typeLabel = vehicleType?.trim();
 
   return (
-    <View style={styles.card} accessibilityRole="summary">
+    <View
+      style={[styles.card, highlighted && styles.cardHighlighted]}
+      accessibilityRole="summary"
+      accessibilityLabel={highlighted ? `${name}, favorite` : name}
+    >
+      {highlighted ? (
+        <Text style={styles.favoriteLabel}>Favorite</Text>
+      ) : null}
       {showMap ? (
         <View style={styles.mapWrap}>
           {coordinate ? (
@@ -149,6 +159,17 @@ const styles = StyleSheet.create({
     borderColor: colors.glassBorder,
     backgroundColor: colors.glass,
     overflow: 'hidden',
+  },
+  cardHighlighted: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentMuted,
+  },
+  favoriteLabel: {
+    ...type.label,
+    color: colors.accent,
+    textTransform: 'uppercase',
+    paddingTop: space.sm,
+    paddingHorizontal: space.md,
   },
   mapWrap: {
     height: MAP_HEIGHT,

@@ -29,6 +29,7 @@ import {
   driveRoutes,
   profileRoutes,
 } from './routes/drives.js';
+import { favoriteRoutes } from './routes/favorites.js';
 import { meRoutes } from './routes/me.js';
 
 declare module 'fastify' {
@@ -214,6 +215,7 @@ export async function buildApp() {
   await app.register(driveRoutes, { prefix: '/v1/drives' });
   await app.register(balanceRoutes, { prefix: '/v1/balances' });
   await app.register(profileRoutes, { prefix: '/v1/profiles' });
+  await app.register(favoriteRoutes, { prefix: '/v1/favorites' });
   await app.register(adminRoutes, { prefix: '/v1/admin' });
   await app.register(analyticsRoutes, { prefix: '/v1/analytics' });
 

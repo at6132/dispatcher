@@ -17,6 +17,7 @@ import {
   createAccount,
   getSessionUser,
   saveOnboarding,
+  updateProfileName,
 } from './sessionStore';
 import type {
   AuthStatus,
@@ -41,6 +42,11 @@ type AuthContextValue = {
   signIn: (input: SignInInput) => Promise<void>;
   signUp: (input: SignUpInput) => Promise<void>;
   completeOnboarding: (input: OnboardingInput) => Promise<void>;
+  /** Update name + onboarding fields from the profile editor. */
+  updateProfile: (input: {
+    name: string;
+    onboarding: OnboardingInput;
+  }) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
@@ -308,6 +314,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [applyUser],
   );
 
+  const updateProfile = useCallback(
+    async (input: { name: string; onboarding: OnboardingInput }) => {
+      const current = userRef.current;
+      if (!current) throw new Error('Not signed in.');
+
+      let next = current;
+      const trimmedName = input.name.trim();
+      if (trimmedName !== current.name) {
+        next = await updateProfileName(trimmedName);
+      }
+      next = await saveOnboarding(current.phone, input.onboarding);
+      // Preserve name from PATCH if onboarding response is stale.
+      if (trimmedName && next.name !== trimmedName) {
+        next = { ...next, name: trimmedName };
+      }
+      await applyUser(
+        {
+          ...next,
+          onboardingComplete: true,
+          onboarding: next.onboarding ?? input.onboarding,
+          completedDrivesCount:
+            next.completedDrivesCount ?? current.completedDrivesCount ?? 0,
+        },
+        true,
+      );
+      logger.info('auth', 'profile_updated', { userId: next.id });
+    },
+    [applyUser],
+  );
+
   const signOut = useCallback(async () => {
     sessionGen.current += 1;
     await clearSession();
@@ -326,9 +362,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signIn,
       signUp,
       completeOnboarding,
+      updateProfile,
       signOut,
     }),
-    [status, user, signIn, signUp, completeOnboarding, signOut],
+    [status, user, signIn, signUp, completeOnboarding, updateProfile, signOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

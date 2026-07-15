@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, isNull, sql } from 'drizzle-orm';
+import { and, desc, eq, gt, isNull, lt } from 'drizzle-orm';
 
 import { env } from '../config/env.js';
 import { db } from '../db/client.js';
@@ -156,7 +156,7 @@ export async function getChallengeStatus(input: {
       .where(
         and(
           eq(adminLoginChallenges.id, row.id),
-          sql`${adminLoginChallenges.sessionIssuedAt} is null`,
+          isNull(adminLoginChallenges.sessionIssuedAt),
         ),
       )
       .returning();
@@ -240,14 +240,15 @@ export async function resolveChallengeByCommand(input: {
 }): Promise<{ ok: boolean; message: string }> {
   const now = new Date();
 
-  // Expire stale pending challenges opportunistically
+  // Expire stale pending challenges opportunistically.
+  // Use lt() — raw sql`... ${date}` breaks with postgres.js (Date not stringified).
   await db
     .update(adminLoginChallenges)
     .set({ status: 'expired' })
     .where(
       and(
         eq(adminLoginChallenges.status, 'pending'),
-        sql`${adminLoginChallenges.expiresAt} < ${now}`,
+        lt(adminLoginChallenges.expiresAt, now),
       ),
     );
 
@@ -306,7 +307,7 @@ export async function resolveChallengeByCommand(input: {
 
     return {
       ok: true,
-      message: `Allowed login \`${challenge.shortCode}\`. Waiting client will get a session.`,
+      message: `Allowed login ${challenge.shortCode}. Waiting client will get a session.`,
     };
   }
 
@@ -330,7 +331,7 @@ export async function resolveChallengeByCommand(input: {
 
   return {
     ok: true,
-    message: `Denied login \`${challenge.shortCode}\`.`,
+    message: `Denied login ${challenge.shortCode}.`,
   };
 }
 
@@ -347,6 +348,20 @@ export async function revokeAllAdminSessions(): Promise<number> {
     .set({ revokedAt: new Date() })
     .where(isNull(adminSessions.revokedAt))
     .returning({ id: adminSessions.id });
+  return rows.length;
+}
+
+export async function countPendingAdminChallenges(): Promise<number> {
+  const now = new Date();
+  const rows = await db
+    .select({ id: adminLoginChallenges.id })
+    .from(adminLoginChallenges)
+    .where(
+      and(
+        eq(adminLoginChallenges.status, 'pending'),
+        gt(adminLoginChallenges.expiresAt, now),
+      ),
+    );
   return rows.length;
 }
 
