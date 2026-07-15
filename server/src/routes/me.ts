@@ -283,6 +283,7 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
         driveStatus: z.enum(['off', 'all']).optional(),
         applicationAccepted: notificationPrefMode.optional(),
         newDrivePosted: notificationPrefMode.optional(),
+        cancelRequest: notificationPrefMode.optional(),
       })
       .safeParse(request.body);
     if (!body.success) {

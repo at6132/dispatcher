@@ -10,6 +10,7 @@ export type NotificationPrefsDto = {
   driveStatus: NotificationPrefMode;
   applicationAccepted: NotificationPrefMode;
   newDrivePosted: NotificationPrefMode;
+  cancelRequest: NotificationPrefMode;
 };
 
 export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefsDto = {
@@ -17,6 +18,7 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefsDto = {
   driveStatus: 'all',
   applicationAccepted: 'all',
   newDrivePosted: 'all',
+  cancelRequest: 'all',
 };
 
 export function mapNotificationPrefs(row: {
@@ -24,12 +26,14 @@ export function mapNotificationPrefs(row: {
   driveStatus: NotificationPrefMode;
   applicationAccepted: NotificationPrefMode;
   newDrivePosted: NotificationPrefMode;
+  cancelRequest: NotificationPrefMode;
 }): NotificationPrefsDto {
   return {
     newApplication: row.newApplication,
     driveStatus: row.driveStatus,
     applicationAccepted: row.applicationAccepted,
     newDrivePosted: row.newDrivePosted,
+    cancelRequest: row.cancelRequest,
   };
 }
 
@@ -60,6 +64,7 @@ export async function updateNotificationPrefs(
     applicationAccepted:
       patch.applicationAccepted ?? current.applicationAccepted,
     newDrivePosted: patch.newDrivePosted ?? current.newDrivePosted,
+    cancelRequest: patch.cancelRequest ?? current.cancelRequest,
   };
 
   await db
@@ -70,6 +75,7 @@ export async function updateNotificationPrefs(
       driveStatus: next.driveStatus === 'favorites' ? 'all' : next.driveStatus,
       applicationAccepted: next.applicationAccepted,
       newDrivePosted: next.newDrivePosted,
+      cancelRequest: next.cancelRequest,
       updatedAt: new Date(),
     })
     .onConflictDoUpdate({
@@ -79,6 +85,7 @@ export async function updateNotificationPrefs(
         driveStatus: next.driveStatus === 'favorites' ? 'all' : next.driveStatus,
         applicationAccepted: next.applicationAccepted,
         newDrivePosted: next.newDrivePosted,
+        cancelRequest: next.cancelRequest,
         updatedAt: new Date(),
       },
     });

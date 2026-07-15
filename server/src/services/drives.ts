@@ -17,6 +17,8 @@ import { listFavoriteUserIds } from './favorites.js';
 import { assertOwnedConfirmedPhotoKey } from './onboarding.js';
 import {
   notifyApplicationAccepted,
+  notifyCancelDecision,
+  notifyCancelRequest,
   notifyDriveStatusChange,
   notifyNewApplication,
   notifyNewDrivePosted,
@@ -82,6 +84,8 @@ export type DriveDto = {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  /** ISO time when assignee requested cancel (awaiting poster). */
+  cancelRequestedAt?: string;
   /** Viewer's application on this drive, if any. */
   viewerApplicationStatus?: 'pending' | 'accepted' | 'rejected' | 'cleared';
   /** True when the viewer favorited the poster. */
@@ -126,6 +130,9 @@ function mapDrive(
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     ...(row.completedAt ? { completedAt: row.completedAt.toISOString() } : {}),
+    ...(row.cancelRequestedAt
+      ? { cancelRequestedAt: row.cancelRequestedAt.toISOString() }
+      : {}),
     ...(viewerApplicationStatus
       ? { viewerApplicationStatus }
       : {}),
@@ -379,8 +386,8 @@ export async function listDrives(
       sql`(${drives.posterId} = ${viewerId} OR ${drives.assigneeId} = ${viewerId})`,
     );
   } else if (query.status === 'history') {
-    // Viewer's completed drives (posted or driven) — includes hidden-from-public
-    conditions.push(eq(drives.status, 'completed'));
+    // Viewer's completed / cancelled drives (posted or driven)
+    conditions.push(inArray(drives.status, ['completed', 'cancelled']));
     conditions.push(
       sql`(${drives.posterId} = ${viewerId} OR ${drives.assigneeId} = ${viewerId})`,
     );
@@ -758,7 +765,7 @@ export async function acceptApplication(
   driveId: string,
   applicationId: string,
 ): Promise<DriveDto> {
-  return withLock(`drive:${driveId}:mutate`, async () =>
+  const dto = await withLock(`drive:${driveId}:mutate`, async () =>
     db.transaction(async (tx) => {
       // Lock drive first (consistent order → no deadlocks with unassign/complete)
       const [drive] = await tx
@@ -878,25 +885,26 @@ export async function acceptApplication(
         throw new AppError(409, 'Drive is not open', 'drive_not_open');
       }
       await getRedis().del('board:open');
-      const dto = mapDrive(updated, posterId);
-      if (dto.assigneeId) {
-        notifyApplicationAccepted({
-          driverId: dto.assigneeId,
-          posterId,
-          driveId,
-          routeText: dto.routeText,
-        });
-      }
-      return dto;
+      return mapDrive(updated, posterId);
     }),
   );
+
+  if (dto.assigneeId) {
+    notifyApplicationAccepted({
+      driverId: dto.assigneeId,
+      posterId,
+      driveId,
+      routeText: dto.routeText,
+    });
+  }
+  return dto;
 }
 
 export async function markDrivePickedUp(
   actorId: string,
   driveId: string,
 ): Promise<DriveDto> {
-  return withLock(`drive:${driveId}:mutate`, async () =>
+  const dto = await withLock(`drive:${driveId}:mutate`, async () =>
     db.transaction(async (tx) => {
       const [drive] = await tx
         .select()
@@ -934,16 +942,18 @@ export async function markDrivePickedUp(
           'invalid_status',
         );
       }
-      notifyDriveStatusChange({
-        posterId: updated.posterId,
-        driveId,
-        routeText: updated.routeText,
-        status: 'picked_up',
-        actorId: actorId,
-      });
       return mapDrive(updated, actorId);
     }),
   );
+
+  notifyDriveStatusChange({
+    posterId: dto.posterId,
+    driveId,
+    routeText: dto.routeText,
+    status: 'picked_up',
+    actorId,
+  });
+  return dto;
 }
 
 export async function unassignDrive(
@@ -980,6 +990,7 @@ export async function unassignDrive(
         .set({
           status: 'open',
           assigneeId: null,
+          cancelRequestedAt: null,
           updatedAt: new Date(),
         })
         .where(and(eq(drives.id, driveId), eq(drives.status, 'assigned')))
@@ -988,6 +999,166 @@ export async function unassignDrive(
         throw new AppError(409, 'Drive is not assigned', 'drive_not_assigned');
       }
       await getRedis().del('board:open');
+      return mapDrive(updated, posterId);
+    }),
+  );
+}
+
+/**
+ * Assignee requests cancel while on the job. Poster must approve or deny.
+ */
+export async function requestDriveCancel(
+  actorId: string,
+  driveId: string,
+): Promise<DriveDto> {
+  return withLock(`drive:${driveId}:mutate`, async () =>
+    db.transaction(async (tx) => {
+      const [drive] = await tx
+        .select()
+        .from(drives)
+        .where(eq(drives.id, driveId))
+        .for('update');
+      if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
+      if (drive.assigneeId !== actorId) {
+        throw new AppError(
+          403,
+          'Only the assigned driver can request cancel',
+          'forbidden',
+        );
+      }
+      if (drive.status !== 'assigned' && drive.status !== 'picked_up') {
+        throw new AppError(
+          409,
+          'Drive is not active',
+          'invalid_status',
+        );
+      }
+      if (drive.cancelRequestedAt) {
+        return mapDrive(drive, actorId);
+      }
+
+      const now = new Date();
+      const [updated] = await tx
+        .update(drives)
+        .set({
+          cancelRequestedAt: now,
+          updatedAt: now,
+        })
+        .where(
+          and(
+            eq(drives.id, driveId),
+            inArray(drives.status, ['assigned', 'picked_up']),
+          ),
+        )
+        .returning();
+      if (!updated) {
+        throw new AppError(409, 'Drive is not active', 'invalid_status');
+      }
+
+      const [driver] = await tx
+        .select({ name: users.name })
+        .from(users)
+        .where(eq(users.id, actorId))
+        .limit(1);
+
+      notifyCancelRequest({
+        posterId: updated.posterId,
+        driverId: actorId,
+        driverName: driver?.name?.trim() || 'Driver',
+        driveId,
+        routeText: updated.routeText,
+      });
+
+      return mapDrive(updated, actorId);
+    }),
+  );
+}
+
+/**
+ * Poster approves or denies a pending cancel request.
+ * Approve → cancelled; deny → clear request, job continues.
+ */
+export async function respondDriveCancel(
+  posterId: string,
+  driveId: string,
+  approve: boolean,
+): Promise<DriveDto> {
+  return withLock(`drive:${driveId}:mutate`, async () =>
+    db.transaction(async (tx) => {
+      const [drive] = await tx
+        .select()
+        .from(drives)
+        .where(eq(drives.id, driveId))
+        .for('update');
+      if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
+      if (drive.posterId !== posterId) {
+        throw new AppError(
+          403,
+          'Only the poster can respond to cancel',
+          'forbidden',
+        );
+      }
+      if (!drive.cancelRequestedAt) {
+        throw new AppError(
+          409,
+          'No cancel request pending',
+          'no_cancel_request',
+        );
+      }
+      if (drive.status !== 'assigned' && drive.status !== 'picked_up') {
+        throw new AppError(409, 'Drive is not active', 'invalid_status');
+      }
+
+      if (!approve) {
+        const [updated] = await tx
+          .update(drives)
+          .set({
+            cancelRequestedAt: null,
+            updatedAt: new Date(),
+          })
+          .where(eq(drives.id, driveId))
+          .returning();
+        if (!updated) {
+          throw new AppError(404, 'Drive not found', 'drive_not_found');
+        }
+        if (drive.assigneeId) {
+          notifyCancelDecision({
+            driverId: drive.assigneeId,
+            driveId,
+            routeText: updated.routeText,
+            approved: false,
+          });
+        }
+        return mapDrive(updated, posterId);
+      }
+
+      const [updated] = await tx
+        .update(drives)
+        .set({
+          status: 'cancelled',
+          cancelRequestedAt: null,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(drives.id, driveId),
+            inArray(drives.status, ['assigned', 'picked_up']),
+          ),
+        )
+        .returning();
+      if (!updated) {
+        throw new AppError(409, 'Drive is not active', 'invalid_status');
+      }
+
+      if (drive.assigneeId) {
+        notifyCancelDecision({
+          driverId: drive.assigneeId,
+          driveId,
+          routeText: updated.routeText,
+          approved: true,
+        });
+      }
+
       return mapDrive(updated, posterId);
     }),
   );
@@ -1011,7 +1182,7 @@ export async function completeDrive(
     throw new AppError(400, 'Enter a valid profit', 'invalid_cost');
   }
 
-  return withLock(`drive:${driveId}:mutate`, async () =>
+  const out = await withLock(`drive:${driveId}:mutate`, async () =>
     db.transaction(async (tx) => {
       const [drive] = await tx
         .select()
@@ -1045,6 +1216,7 @@ export async function completeDrive(
           waitMinutes: input.waitMinutes,
           completeNote: input.note?.trim() || undefined,
           completedAt: new Date(),
+          cancelRequestedAt: null,
           updatedAt: new Date(),
         })
         .where(and(eq(drives.id, driveId), eq(drives.status, 'picked_up')))
@@ -1069,13 +1241,6 @@ export async function completeDrive(
           })
           .returning();
         if (!balance) throw new AppError(500, 'Balance create failed', 'balance_failed');
-        notifyDriveStatusChange({
-          posterId: drive.posterId,
-          driveId,
-          routeText: updated.routeText,
-          status: 'completed',
-          actorId: actorId,
-        });
         return { drive: mapDrive(updated, actorId), balanceId: balance.id };
       } catch (err) {
         if (isUniqueViolation(err)) {
@@ -1085,6 +1250,15 @@ export async function completeDrive(
       }
     }),
   );
+
+  notifyDriveStatusChange({
+    posterId: out.drive.posterId,
+    driveId,
+    routeText: out.drive.routeText,
+    status: 'completed',
+    actorId,
+  });
+  return out;
 }
 
 export async function hideDrive(posterId: string, driveId: string): Promise<DriveDto> {

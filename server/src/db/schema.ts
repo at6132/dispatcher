@@ -127,6 +127,8 @@ export const drives = pgTable(
     completeNote: text('complete_note'),
     hiddenByPoster: boolean('hidden_by_poster').notNull().default(false),
     completedAt: timestamp('completed_at', { withTimezone: true }),
+    /** Set when assignee requests cancel; poster must approve/deny. */
+    cancelRequestedAt: timestamp('cancel_requested_at', { withTimezone: true }),
     createdAt: timestamp('created_at', { withTimezone: true })
       .notNull()
       .defaultNow(),
@@ -226,6 +228,10 @@ export const notificationPreferences = pgTable('notification_preferences', {
     .default('all'),
   /** Driver: any new drive posted to the board. */
   newDrivePosted: notificationPrefModeEnum('new_drive_posted')
+    .notNull()
+    .default('all'),
+  /** Poster: assigned driver requested to cancel the ride. */
+  cancelRequest: notificationPrefModeEnum('cancel_request')
     .notNull()
     .default('all'),
   updatedAt: timestamp('updated_at', { withTimezone: true })

@@ -210,6 +210,53 @@ export function notifyApplicationAccepted(input: {
   });
 }
 
+/** Poster: assigned driver requested cancel. `favorites` = favorited drivers. */
+export function notifyCancelRequest(input: {
+  posterId: string;
+  driverId: string;
+  driverName: string;
+  driveId: string;
+  routeText: string;
+}) {
+  fireAndForget('cancel_request', async () => {
+    const ok = await shouldNotify(
+      input.posterId,
+      'cancelRequest',
+      input.driverId,
+    );
+    if (!ok) return;
+    await notifyUser(
+      input.posterId,
+      'Cancel requested',
+      `${input.driverName} wants to cancel ${input.routeText}`,
+      { type: 'cancel_request', driveId: input.driveId },
+    );
+  });
+}
+
+/** Driver: poster approved or denied their cancel request (always sent). */
+export function notifyCancelDecision(input: {
+  driverId: string;
+  driveId: string;
+  routeText: string;
+  approved: boolean;
+}) {
+  fireAndForget('cancel_decision', async () => {
+    await notifyUser(
+      input.driverId,
+      input.approved ? 'Ride cancelled' : 'Cancel denied',
+      input.approved
+        ? `${input.routeText} was cancelled`
+        : `Stay on ${input.routeText} — dispatcher kept the ride`,
+      {
+        type: 'cancel_decision',
+        driveId: input.driveId,
+        approved: input.approved ? '1' : '0',
+      },
+    );
+  });
+}
+
 /**
  * Drivers: a new drive was posted (any open drive on the board).
  * `favorites` = only when the poster is favorited.
