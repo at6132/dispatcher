@@ -2,6 +2,12 @@
 
 Standalone ops console for the Dispatcher API. Separate from the Expo driver app.
 
+## Production
+
+https://admin-production-3f9a.up.railway.app
+
+Talks to `https://api-production-f4ac.up.railway.app`. Login with password + Telegram `/allow`.
+
 ## Run locally
 
 ```bash
@@ -16,29 +22,9 @@ Set `VITE_API_URL` in `.env` to your API (local `http://localhost:8080` or Railw
 
 ## Login (2 steps)
 
-1. Enter the admin password (server `ADMIN_PASSWORD`, currently set to `6132` in env).
-2. Wait on the loading screen. Both approved Telegram chats get a message with a short code.
-3. From an approved chat, send `/allow` or `/allow CODE`.
-4. The console polls and enters once Telegram approves.
+1. Enter the admin password (server `ADMIN_PASSWORD`).
+2. Wait on the loading screen. Approved Telegram chats get a short code.
+3. Reply `/allow` or `/allow CODE`.
+4. The console unlocks once Telegram approves.
 
-Deny with `/deny`. Kill every admin session with `/logoutall`.
-
-## What you can manage
-
-- Dashboard KPIs
-- Users (edit, lock, revoke refresh tokens, set password)
-- Drives (edit, cancel, see passenger phone)
-- Applications
-- Balances (settle / adjust with reason)
-- Analytics funnel + events
-- Security trace (requestId / IP / phone / user)
-- Audit log
-- Admin sessions
-
-## CORS
-
-Add the admin origin to the API `CORS_ORIGINS`, e.g.:
-
-```
-CORS_ORIGINS=http://localhost:5173
-```
+Deny with `/deny`. Kill sessions with `/logoutall`.

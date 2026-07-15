@@ -351,6 +351,20 @@ export async function revokeAllAdminSessions(): Promise<number> {
   return rows.length;
 }
 
+export async function countPendingAdminChallenges(): Promise<number> {
+  const now = new Date();
+  const rows = await db
+    .select({ id: adminLoginChallenges.id })
+    .from(adminLoginChallenges)
+    .where(
+      and(
+        eq(adminLoginChallenges.status, 'pending'),
+        gt(adminLoginChallenges.expiresAt, now),
+      ),
+    );
+  return rows.length;
+}
+
 export async function touchAdminSession(sessionId: string): Promise<void> {
   await db
     .update(adminSessions)
