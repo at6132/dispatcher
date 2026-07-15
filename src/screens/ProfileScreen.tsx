@@ -19,6 +19,7 @@ import { ChevronLeft, ChevronRight, Pencil, Settings, X } from 'lucide-react-nat
 import { mapApiError } from '../api/errors';
 import {
   getNotificationPrefs,
+  normalizeNotificationPrefs,
   updateNotificationPrefs,
   type DriveStatusPrefMode,
   type NotificationPrefMode,
@@ -63,6 +64,8 @@ const DEFAULT_PREFS: NotificationPrefs = {
   driveStatus: 'all',
   applicationAccepted: 'all',
   newDrivePosted: 'all',
+  cancelRequest: 'all',
+  applicationCleared: 'all',
 };
 type ProfileScreenProps = {
   visible: boolean;
@@ -192,13 +195,7 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
     setNotifLoading(true);
     void getNotificationPrefs()
       .then((prefs) => {
-        setNotifPrefs({
-          newApplication: prefs.newApplication,
-          driveStatus:
-            prefs.driveStatus === 'favorites' ? 'all' : prefs.driveStatus,
-          applicationAccepted: prefs.applicationAccepted,
-          newDrivePosted: prefs.newDrivePosted,
-        });
+        setNotifPrefs(normalizeNotificationPrefs(prefs));
       })
       .catch((err) => {
         setNotifError(mapApiError(err).message);
@@ -223,13 +220,7 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
     setNotifSaving(true);
     try {
       const saved = await updateNotificationPrefs({ [key]: value });
-      setNotifPrefs({
-        newApplication: saved.newApplication,
-        driveStatus:
-          saved.driveStatus === 'favorites' ? 'all' : saved.driveStatus,
-        applicationAccepted: saved.applicationAccepted,
-        newDrivePosted: saved.newDrivePosted,
-      });
+      setNotifPrefs(normalizeNotificationPrefs(saved));
     } catch (err) {
       setNotifPrefs(prev);
       setNotifError(mapApiError(err).message);
@@ -415,6 +406,18 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
                         <Text style={styles.notifHint}>
                           Picked up, completed, or cancelled.
                         </Text>
+                        <ChoiceGroup
+                          label="Cancel requests"
+                          options={PREF_OPTIONS}
+                          value={notifPrefs.cancelRequest}
+                          onChange={(v) =>
+                            void patchNotifPref('cancelRequest', v)
+                          }
+                        />
+                        <Text style={styles.notifHint}>
+                          When a driver asks to cancel. Favorites only =
+                          favorited drivers.
+                        </Text>
                       </View>
                     )}
                   </View>
@@ -424,7 +427,7 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
                     {notifLoading ? null : (
                       <View style={styles.notifStack}>
                         <ChoiceGroup
-                          label="You got accepted"
+                          label="You got the job"
                           options={PREF_OPTIONS}
                           value={notifPrefs.applicationAccepted}
                           onChange={(v) =>
@@ -433,6 +436,18 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
                         />
                         <Text style={styles.notifHint}>
                           Favorites only = favorited dispatchers.
+                        </Text>
+                        <ChoiceGroup
+                          label="Submissions cleared"
+                          options={PREF_OPTIONS}
+                          value={notifPrefs.applicationCleared}
+                          onChange={(v) =>
+                            void patchNotifPref('applicationCleared', v)
+                          }
+                        />
+                        <Text style={styles.notifHint}>
+                          When a dispatcher clears applies on a post you
+                          applied to. Favorites = favorited dispatchers.
                         </Text>
                         <ChoiceGroup
                           label="New drives posted"

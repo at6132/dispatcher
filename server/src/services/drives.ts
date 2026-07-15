@@ -17,6 +17,7 @@ import { listFavoriteUserIds } from './favorites.js';
 import { assertOwnedConfirmedPhotoKey } from './onboarding.js';
 import {
   notifyApplicationAccepted,
+  notifyApplicationsCleared,
   notifyCancelDecision,
   notifyCancelRequest,
   notifyDriveStatusChange,
@@ -680,7 +681,7 @@ export async function applyToDrive(
 }
 
 export async function clearApplications(posterId: string, driveId: string) {
-  return withLock(`drive:${driveId}:mutate`, async () =>
+  const result = await withLock(`drive:${driveId}:mutate`, async () =>
     db.transaction(async (tx) => {
       const [drive] = await tx
         .select()
@@ -704,11 +705,31 @@ export async function clearApplications(posterId: string, driveId: string) {
             inArray(applications.status, ['pending', 'rejected']),
           ),
         )
-        .returning({ id: applications.id });
+        .returning({
+          id: applications.id,
+          driverId: applications.driverId,
+        });
 
-      return { cleared: cleared.length };
+      return {
+        cleared: cleared.length,
+        driverIds: cleared.map((r) => r.driverId),
+        routeText: drive.routeText,
+        posterId: drive.posterId,
+        driveId: drive.id,
+      };
     }),
   );
+
+  if (result.driverIds.length > 0) {
+    notifyApplicationsCleared({
+      posterId: result.posterId,
+      driveId: result.driveId,
+      routeText: result.routeText,
+      driverIds: result.driverIds,
+    });
+  }
+
+  return { cleared: result.cleared };
 }
 
 export async function listApplications(posterId: string, driveId: string) {

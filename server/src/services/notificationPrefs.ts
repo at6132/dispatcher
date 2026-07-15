@@ -11,6 +11,7 @@ export type NotificationPrefsDto = {
   applicationAccepted: NotificationPrefMode;
   newDrivePosted: NotificationPrefMode;
   cancelRequest: NotificationPrefMode;
+  applicationCleared: NotificationPrefMode;
 };
 
 export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefsDto = {
@@ -19,6 +20,7 @@ export const DEFAULT_NOTIFICATION_PREFS: NotificationPrefsDto = {
   applicationAccepted: 'all',
   newDrivePosted: 'all',
   cancelRequest: 'all',
+  applicationCleared: 'all',
 };
 
 export function mapNotificationPrefs(row: {
@@ -27,6 +29,7 @@ export function mapNotificationPrefs(row: {
   applicationAccepted: NotificationPrefMode;
   newDrivePosted: NotificationPrefMode;
   cancelRequest: NotificationPrefMode;
+  applicationCleared: NotificationPrefMode;
 }): NotificationPrefsDto {
   return {
     newApplication: row.newApplication,
@@ -34,7 +37,12 @@ export function mapNotificationPrefs(row: {
     applicationAccepted: row.applicationAccepted,
     newDrivePosted: row.newDrivePosted,
     cancelRequest: row.cancelRequest,
+    applicationCleared: row.applicationCleared,
   };
+}
+
+function clampDriveStatus(mode: NotificationPrefMode): 'off' | 'all' {
+  return mode === 'favorites' ? 'all' : mode;
 }
 
 export async function getNotificationPrefs(
@@ -56,15 +64,15 @@ export async function updateNotificationPrefs(
   const current = await getNotificationPrefs(userId);
   const next: NotificationPrefsDto = {
     newApplication: patch.newApplication ?? current.newApplication,
-    // Drive status has no favorites filter in product — clamp favorites → all.
-    driveStatus:
-      patch.driveStatus === 'favorites'
-        ? 'all'
-        : (patch.driveStatus ?? current.driveStatus),
+    driveStatus: clampDriveStatus(
+      patch.driveStatus ?? current.driveStatus,
+    ),
     applicationAccepted:
       patch.applicationAccepted ?? current.applicationAccepted,
     newDrivePosted: patch.newDrivePosted ?? current.newDrivePosted,
     cancelRequest: patch.cancelRequest ?? current.cancelRequest,
+    applicationCleared:
+      patch.applicationCleared ?? current.applicationCleared,
   };
 
   await db
@@ -72,26 +80,25 @@ export async function updateNotificationPrefs(
     .values({
       userId,
       newApplication: next.newApplication,
-      driveStatus: next.driveStatus === 'favorites' ? 'all' : next.driveStatus,
+      driveStatus: next.driveStatus,
       applicationAccepted: next.applicationAccepted,
       newDrivePosted: next.newDrivePosted,
       cancelRequest: next.cancelRequest,
+      applicationCleared: next.applicationCleared,
       updatedAt: new Date(),
     })
     .onConflictDoUpdate({
       target: notificationPreferences.userId,
       set: {
         newApplication: next.newApplication,
-        driveStatus: next.driveStatus === 'favorites' ? 'all' : next.driveStatus,
+        driveStatus: next.driveStatus,
         applicationAccepted: next.applicationAccepted,
         newDrivePosted: next.newDrivePosted,
         cancelRequest: next.cancelRequest,
+        applicationCleared: next.applicationCleared,
         updatedAt: new Date(),
       },
     });
 
-  return {
-    ...next,
-    driveStatus: next.driveStatus === 'favorites' ? 'all' : next.driveStatus,
-  };
+  return next;
 }

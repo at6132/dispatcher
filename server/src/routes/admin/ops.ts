@@ -550,7 +550,11 @@ export const adminOpsRoutes: FastifyPluginAsync = async (app) => {
 
     const [after] = await db
       .update(drives)
-      .set({ status: 'cancelled', updatedAt: new Date() })
+      .set({
+        status: 'cancelled',
+        cancelRequestedAt: null,
+        updatedAt: new Date(),
+      })
       .where(eq(drives.id, params.data.id))
       .returning();
 

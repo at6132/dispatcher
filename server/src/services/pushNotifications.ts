@@ -203,10 +203,41 @@ export function notifyApplicationAccepted(input: {
     if (!ok) return;
     await notifyUser(
       input.driverId,
-      'You’re on the job',
+      'You got the job',
       `Accepted for ${input.routeText}`,
       { type: 'application_accepted', driveId: input.driveId },
     );
+  });
+}
+
+/**
+ * Drivers: poster cleared submissions on a drive they applied to.
+ * `favorites` = only favorited posters.
+ */
+export function notifyApplicationsCleared(input: {
+  posterId: string;
+  driveId: string;
+  routeText: string;
+  driverIds: string[];
+}) {
+  fireAndForget('application_cleared', async () => {
+    const unique = [...new Set(input.driverIds)].filter(
+      (id) => id !== input.posterId,
+    );
+    for (const driverId of unique) {
+      const ok = await shouldNotify(
+        driverId,
+        'applicationCleared',
+        input.posterId,
+      );
+      if (!ok) continue;
+      await notifyUser(
+        driverId,
+        'Submissions cleared',
+        `Your apply on ${input.routeText} was cleared — you can apply again`,
+        { type: 'application_cleared', driveId: input.driveId },
+      );
+    }
   });
 }
 

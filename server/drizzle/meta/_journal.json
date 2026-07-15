@@ -78,6 +78,13 @@
       "when": 1784800000000,
       "tag": "0010_cancel_request",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1784900000000,
+      "tag": "0011_application_cleared_notif",
+      "breakpoints": true
     }
   ]
 }

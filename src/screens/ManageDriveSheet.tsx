@@ -18,6 +18,7 @@ import {
   acceptApplication,
   clearApplications,
   listApplications,
+  respondDriveCancel,
   updateDrive,
   type DriveApplication,
   type DriveListItem,
@@ -124,6 +125,9 @@ export function ManageDriveSheet({
   const [submitted, setSubmitted] = useState(false);
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [cancelResponding, setCancelResponding] = useState<
+    'approve' | 'deny' | null
+  >(null);
 
   const fillDetails = useCallback((d: DriveListItem) => {
     setTitle(d.routeText);
@@ -185,7 +189,7 @@ export function ManageDriveSheet({
   }, [visible, drive, tab]);
 
   const requestClose = () => {
-    if (saving || acceptingId || clearing) return;
+    if (saving || acceptingId || clearing || cancelResponding) return;
     Keyboard.dismiss();
     onClose();
   };
@@ -264,6 +268,36 @@ export function ManageDriveSheet({
     }
   };
 
+  const onCancelRespond = async (approve: boolean) => {
+    const target = drive ?? active;
+    if (!target) return;
+    setActionError(null);
+    setCancelResponding(approve ? 'approve' : 'deny');
+    try {
+      const updated = await respondDriveCancel(target.id, approve);
+      setActive((prev) =>
+        prev
+          ? {
+              ...prev,
+              ...updated,
+              poster: prev.poster,
+              assignee: prev.assignee,
+              assigneeLat: prev.assigneeLat,
+              assigneeLng: prev.assigneeLng,
+            }
+          : prev,
+      );
+      onChanged();
+      if (approve) {
+        onClose();
+      }
+    } catch (err) {
+      setActionError(mapApiError(err).message);
+    } finally {
+      setCancelResponding(null);
+    }
+  };
+
   const titleError =
     submitted && title.trim().length < 2
       ? 'Enter a title like SF to Monticello'
@@ -274,12 +308,15 @@ export function ManageDriveSheet({
   const tripError =
     submitted && !tripType ? 'Pick one way or round trip' : undefined;
 
-  const busy = saving || acceptingId != null || clearing;
-  const sheetDrive = drive ?? active;
+  const busy =
+    saving || acceptingId != null || clearing || cancelResponding != null;
+  // Prefer local snapshot so optimistic cancel respond updates stick.
+  const sheetDrive = active ?? drive;
 
   if (!sheetDrive || (!visible && !mounted)) return null;
 
   const isOpen = sheetDrive.status === 'open';
+  const cancelPending = Boolean(sheetDrive.cancelRequestedAt);
   const pendingApps = apps
     .filter((a) => a.status === 'pending')
     .slice()
@@ -529,7 +566,9 @@ export function ManageDriveSheet({
                   <View style={styles.statusCard}>
                     <Text style={styles.statusEyebrow}>Ride status</Text>
                     <Text style={styles.statusValue}>
-                      {driveStatusLabel(sheetDrive.status)}
+                      {cancelPending
+                        ? 'Cancel requested'
+                        : driveStatusLabel(sheetDrive.status)}
                     </Text>
                     {sheetDrive.status === 'completed' &&
                     sheetDrive.costCents != null ? (
@@ -538,6 +577,42 @@ export function ManageDriveSheet({
                       </Text>
                     ) : null}
                   </View>
+
+                  {cancelPending &&
+                  (sheetDrive.status === 'assigned' ||
+                    sheetDrive.status === 'picked_up') ? (
+                    <View style={styles.cancelBanner}>
+                      <Text style={styles.cancelTitle}>
+                        Driver wants to cancel
+                      </Text>
+                      <Text style={styles.cancelBody}>
+                        Approve to end the ride, or keep it if they should stay
+                        on the job.
+                      </Text>
+                      <View style={styles.cancelActions}>
+                        <Button
+                          loading={cancelResponding === 'approve'}
+                          disabled={busy}
+                          onPress={() => void onCancelRespond(true)}
+                        >
+                          Approve cancel
+                        </Button>
+                        <Button
+                          variant="ghost"
+                          loading={cancelResponding === 'deny'}
+                          disabled={busy}
+                          onPress={() => void onCancelRespond(false)}
+                        >
+                          Keep ride
+                        </Button>
+                      </View>
+                      {actionError ? (
+                        <Text style={styles.formError} accessibilityRole="alert">
+                          {actionError}
+                        </Text>
+                      ) : null}
+                    </View>
+                  ) : null}
 
                   {profitCents != null ? (
                     <View style={styles.profitCard}>
@@ -932,6 +1007,28 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.glassBorder,
     backgroundColor: colors.glass,
+  },
+  cancelBanner: {
+    gap: space.sm,
+    padding: space.md,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: 'rgba(208, 138, 138, 0.4)',
+    backgroundColor: 'rgba(208, 138, 138, 0.1)',
+  },
+  cancelTitle: {
+    fontFamily: fonts.sansSemi,
+    fontSize: 16,
+    letterSpacing: -0.2,
+    color: colors.ink,
+  },
+  cancelBody: {
+    ...type.caption,
+    color: colors.muted,
+  },
+  cancelActions: {
+    gap: space.sm,
+    marginTop: space.xs,
   },
   profitCard: {
     gap: space.xs,

@@ -284,6 +284,7 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
         applicationAccepted: notificationPrefMode.optional(),
         newDrivePosted: notificationPrefMode.optional(),
         cancelRequest: notificationPrefMode.optional(),
+        applicationCleared: notificationPrefMode.optional(),
       })
       .safeParse(request.body);
     if (!body.success) {

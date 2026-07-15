@@ -222,7 +222,7 @@ export const notificationPreferences = pgTable('notification_preferences', {
   driveStatus: notificationPrefModeEnum('drive_status')
     .notNull()
     .default('all'),
-  /** Driver: you were accepted for a drive. */
+  /** Driver: you were accepted for a drive (“you got the job”). */
   applicationAccepted: notificationPrefModeEnum('application_accepted')
     .notNull()
     .default('all'),
@@ -232,6 +232,10 @@ export const notificationPreferences = pgTable('notification_preferences', {
     .default('all'),
   /** Poster: assigned driver requested to cancel the ride. */
   cancelRequest: notificationPrefModeEnum('cancel_request')
+    .notNull()
+    .default('all'),
+  /** Driver: poster cleared submissions on a drive you applied to. */
+  applicationCleared: notificationPrefModeEnum('application_cleared')
     .notNull()
     .default('all'),
   updatedAt: timestamp('updated_at', { withTimezone: true })

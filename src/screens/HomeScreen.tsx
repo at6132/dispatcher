@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Animated,
   FlatList,
   Pressable,
@@ -20,6 +21,7 @@ import {
   applyToDrive,
   listDrives,
   markDrivePickedUp,
+  requestDriveCancel,
   type Drive,
   type DriveBoard,
   type DriveListItem,
@@ -125,6 +127,8 @@ export function HomeScreen({
   );
   const [pickingUpId, setPickingUpId] = useState<string | null>(null);
   const [pickupError, setPickupError] = useState<string | null>(null);
+  const [cancellingId, setCancellingId] = useState<string | null>(null);
+  const [cancelError, setCancelError] = useState<string | null>(null);
 
   const loadBoard = useCallback(
     async (board: DriveBoard, mode: 'initial' | 'refresh' = 'initial') => {
@@ -361,6 +365,42 @@ export function HomeScreen({
     }
   };
 
+  const onRequestCancel = (driveId: string) => {
+    Alert.alert(
+      'Cancel this ride?',
+      'The dispatcher will get a notification and must approve before the ride is cancelled.',
+      [
+        { text: 'Keep ride', style: 'cancel' },
+        {
+          text: 'Request cancel',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setCancelError(null);
+              setCancellingId(driveId);
+              try {
+                const updated = await requestDriveCancel(driveId);
+                setBoards((prev) => ({
+                  ...prev,
+                  active: {
+                    ...prev.active,
+                    items: prev.active.items.map((d) =>
+                      d.id === driveId ? { ...d, ...updated } : d,
+                    ),
+                  },
+                }));
+              } catch (err) {
+                setCancelError(mapApiError(err).message);
+              } finally {
+                setCancellingId(null);
+              }
+            })();
+          },
+        },
+      ],
+    );
+  };
+
   const onDriveCompleted = (driveId: string, updated: Drive) => {
     setCompletingDrive(null);
     setBoards((prev) => {
@@ -443,9 +483,13 @@ export function HomeScreen({
         onComplete={
           board === 'active' ? () => setCompletingDrive(item) : undefined
         }
+        onRequestCancel={
+          board === 'active' ? () => onRequestCancel(item.id) : undefined
+        }
         applying={applyingId === item.id}
         applied={applied}
         pickingUp={pickingUpId === item.id}
+        cancelling={cancellingId === item.id}
         applyAgain={applyAgain}
         showMap={opts?.showMap}
       />
@@ -576,9 +620,9 @@ export function HomeScreen({
                   refreshControl={refresh}
                   ListEmptyComponent={listEmpty(b, state)}
                   ListHeaderComponent={
-                    pickupError ? (
+                    pickupError || cancelError ? (
                       <Text style={styles.applyError} accessibilityRole="alert">
-                        {pickupError}
+                        {pickupError ?? cancelError}
                       </Text>
                     ) : null
                   }

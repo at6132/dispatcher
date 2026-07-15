@@ -178,7 +178,7 @@
       },
       "patch": {
         "security": [{ "bearerAuth": [] }],
-        "summary": "Update notification preferences. driveStatus accepts off|all only.",
+        "summary": "Update notification preferences. Keys: newApplication, driveStatus (off|all), applicationAccepted (you got the job), newDrivePosted, cancelRequest, applicationCleared. Modes off|all|favorites where noted.",
         "responses": { "200": { "description": "OK" } }
       }
     },

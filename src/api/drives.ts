@@ -53,6 +53,8 @@ export type Drive = {
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
+  /** When set, assignee requested cancel — poster must approve/deny. */
+  cancelRequestedAt?: string;
   viewerApplicationStatus?: ApplicationStatus;
   /** True when the viewer favorited the poster. */
   posterIsFavorite?: boolean;
@@ -233,4 +235,28 @@ export async function completeDrive(
       body: JSON.stringify(input),
     },
   );
+}
+
+/** Assignee requests cancel — poster must approve. */
+export async function requestDriveCancel(driveId: string): Promise<Drive> {
+  const data = await apiFetch<{ drive: Drive }>(
+    `/v1/drives/${driveId}/cancel-request`,
+    { method: 'POST', body: JSON.stringify({}) },
+  );
+  return data.drive;
+}
+
+/** Poster approves or denies a pending cancel request. */
+export async function respondDriveCancel(
+  driveId: string,
+  approve: boolean,
+): Promise<Drive> {
+  const data = await apiFetch<{ drive: Drive }>(
+    `/v1/drives/${driveId}/cancel-respond`,
+    {
+      method: 'POST',
+      body: JSON.stringify({ approve }),
+    },
+  );
+  return data.drive;
 }
