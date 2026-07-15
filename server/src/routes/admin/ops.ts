@@ -23,6 +23,7 @@ import {
   requireAdminSession,
 } from '../../middleware/adminAuth.js';
 import { revokeAdminSession, revokeAllAdminSessions } from '../../services/adminAuth.js';
+import { notifyDriveStatusChange } from '../../services/pushNotifications.js';
 
 function parseLimit(raw: unknown, fallback = 50, max = 200): number {
   const n = Number(raw);
@@ -552,6 +553,15 @@ export const adminOpsRoutes: FastifyPluginAsync = async (app) => {
       .set({ status: 'cancelled', updatedAt: new Date() })
       .where(eq(drives.id, params.data.id))
       .returning();
+
+    if (after) {
+      notifyDriveStatusChange({
+        posterId: after.posterId,
+        driveId: after.id,
+        routeText: after.routeText,
+        status: 'cancelled',
+      });
+    }
 
     const session = requireAdminSession(request);
     writeAudit({

@@ -15,6 +15,14 @@ import {
   createPhotoPresign,
   saveOnboarding,
 } from '../services/onboarding.js';
+import {
+  getNotificationPrefs,
+  updateNotificationPrefs,
+} from '../services/notificationPrefs.js';
+import {
+  deletePushToken,
+  upsertPushToken,
+} from '../services/pushNotifications.js';
 
 const vehicleClass = z.enum([
   'sedan',
@@ -23,6 +31,8 @@ const vehicleClass = z.enum([
   'minivan',
   'sprinter',
 ]);
+
+const notificationPrefMode = z.enum(['off', 'all', 'favorites']);
 
 export const meRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', requireAuth);
@@ -241,6 +251,115 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
           userId: shortId(request.user?.id),
           code: err.code,
         });
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.get('/notifications', async (request, reply) => {
+    try {
+      await assertClientLimits(request, reply, {
+        name: 'me_notifications_get',
+        ipLimit: 60,
+        userLimit: 40,
+        windowSec: 60,
+      });
+      const user = requireUser(request);
+      const preferences = await getNotificationPrefs(user.id);
+      return reply.send({ preferences });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.patch('/notifications', async (request, reply) => {
+    const body = z
+      .object({
+        newApplication: notificationPrefMode.optional(),
+        driveStatus: z.enum(['off', 'all']).optional(),
+        applicationAccepted: notificationPrefMode.optional(),
+        newDrivePosted: notificationPrefMode.optional(),
+      })
+      .safeParse(request.body);
+    if (!body.success) {
+      return sendError(reply, 400, 'Invalid body', 'invalid_body');
+    }
+    try {
+      await assertClientLimits(request, reply, {
+        name: 'me_notifications_patch',
+        ipLimit: 30,
+        userLimit: 20,
+        windowSec: 3600,
+        failClosed: true,
+      });
+      const user = requireUser(request);
+      const preferences = await updateNotificationPrefs(user.id, body.data);
+      logDomain(request.log, 'me.notifications.patch', {
+        requestId: request.id,
+        userId: shortId(user.id),
+      });
+      return reply.send({ preferences });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.put('/push-token', async (request, reply) => {
+    const body = z
+      .object({
+        token: z.string().min(8).max(512),
+        platform: z.enum(['ios', 'android', 'web']).optional(),
+      })
+      .safeParse(request.body);
+    if (!body.success) {
+      return sendError(reply, 400, 'Invalid body', 'invalid_body');
+    }
+    try {
+      await assertClientLimits(request, reply, {
+        name: 'me_push_token_put',
+        ipLimit: 30,
+        userLimit: 20,
+        windowSec: 3600,
+        failClosed: true,
+      });
+      const user = requireUser(request);
+      await upsertPushToken(user.id, body.data.token, body.data.platform);
+      logDomain(request.log, 'me.push_token.put', {
+        requestId: request.id,
+        userId: shortId(user.id),
+        platform: body.data.platform,
+      });
+      return reply.status(204).send();
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.delete('/push-token', async (request, reply) => {
+    const body = z
+      .object({
+        token: z.string().min(8).max(512),
+      })
+      .safeParse(request.body);
+    if (!body.success) {
+      return sendError(reply, 400, 'Invalid body', 'invalid_body');
+    }
+    try {
+      const user = requireUser(request);
+      await deletePushToken(user.id, body.data.token);
+      return reply.status(204).send();
+    } catch (err) {
+      if (err instanceof AppError) {
         return sendError(reply, err.statusCode, err.message, err.code);
       }
       throw err;

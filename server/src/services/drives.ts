@@ -13,20 +13,14 @@ import { isUniqueViolation, withLock } from '../lib/locks.js';
 import { isValidPhone, nextSundayDeadlineNy, normalizePhone } from '../lib/phone.js';
 import { getRedis } from '../lib/redis.js';
 import { toAuthUser, toPublicProfile } from './auth.js';
-import { AppError } from '../lib/errors.js';
-import { normalizePhone, isValidPhone } from '../lib/phone.js';
-import { getRedis } from '../lib/redis.js';
-import { withLock } from '../lib/locks.js';
-import { nextSundayDeadlineNy } from '../lib/time.js';
-import { assertOwnedConfirmedPhotoKey } from './photos.js';
 import { listFavoriteUserIds } from './favorites.js';
+import { assertOwnedConfirmedPhotoKey } from './onboarding.js';
 import {
   notifyApplicationAccepted,
   notifyDriveStatusChange,
   notifyNewApplication,
   notifyNewDrivePosted,
 } from './pushNotifications.js';
-import { assertOwnedConfirmedPhotoKey } from './onboarding.js';
 
 function canSeePassenger(drive: {
   posterId: string;
@@ -232,6 +226,11 @@ export async function createDrive(
     .returning();
   if (!row) throw new AppError(500, 'Could not create drive', 'create_failed');
   await getRedis().del('board:open');
+  notifyNewDrivePosted({
+    posterId,
+    driveId: row.id,
+    routeText: row.routeText,
+  });
   return mapDrive(row, posterId);
 }
 
@@ -562,7 +561,7 @@ export async function applyToDrive(
     throw new AppError(403, 'Complete onboarding first', 'onboarding_required');
   }
 
-  return withLock(`drive:${driveId}:apply`, async () =>
+  const result = await withLock(`drive:${driveId}:apply`, async () =>
     db.transaction(async (tx) => {
       const [drive] = await tx
         .select()
@@ -640,7 +639,7 @@ export async function applyToDrive(
         if (!updated) {
           throw new AppError(409, 'Already applied', 'already_applied');
         }
-        return updated;
+        return { app: updated, drive };
       }
 
       try {
@@ -653,7 +652,7 @@ export async function applyToDrive(
             lng,
           })
           .returning();
-        return app;
+        return { app: app!, drive };
       } catch (err) {
         if (isUniqueViolation(err)) {
           throw new AppError(409, 'Already applied', 'already_applied');
@@ -662,6 +661,15 @@ export async function applyToDrive(
       }
     }),
   );
+
+  notifyNewApplication({
+    posterId: result.drive.posterId,
+    driverId,
+    driverName: driver.name,
+    driveId,
+    routeText: result.drive.routeText,
+  });
+  return result.app;
 }
 
 export async function clearApplications(posterId: string, driveId: string) {
@@ -870,7 +878,16 @@ export async function acceptApplication(
         throw new AppError(409, 'Drive is not open', 'drive_not_open');
       }
       await getRedis().del('board:open');
-      return mapDrive(updated, posterId);
+      const dto = mapDrive(updated, posterId);
+      if (dto.assigneeId) {
+        notifyApplicationAccepted({
+          driverId: dto.assigneeId,
+          posterId,
+          driveId,
+          routeText: dto.routeText,
+        });
+      }
+      return dto;
     }),
   );
 }
@@ -917,6 +934,13 @@ export async function markDrivePickedUp(
           'invalid_status',
         );
       }
+      notifyDriveStatusChange({
+        posterId: updated.posterId,
+        driveId,
+        routeText: updated.routeText,
+        status: 'picked_up',
+        actorId: actorId,
+      });
       return mapDrive(updated, actorId);
     }),
   );
@@ -1045,6 +1069,13 @@ export async function completeDrive(
           })
           .returning();
         if (!balance) throw new AppError(500, 'Balance create failed', 'balance_failed');
+        notifyDriveStatusChange({
+          posterId: drive.posterId,
+          driveId,
+          routeText: updated.routeText,
+          status: 'completed',
+          actorId: actorId,
+        });
         return { drive: mapDrive(updated, actorId), balanceId: balance.id };
       } catch (err) {
         if (isUniqueViolation(err)) {

@@ -170,6 +170,30 @@
         "responses": { "200": { "description": "OK" } }
       }
     },
+    "/v1/me/notifications": {
+      "get": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Get notification preferences (off | all | favorites per event)",
+        "responses": { "200": { "description": "OK" } }
+      },
+      "patch": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Update notification preferences. driveStatus accepts off|all only.",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/v1/me/push-token": {
+      "put": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Register Expo push token. Body: { token, platform? }",
+        "responses": { "204": { "description": "No content" } }
+      },
+      "delete": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Unregister Expo push token. Body: { token }",
+        "responses": { "204": { "description": "No content" } }
+      }
+    },
     "/v1/drives": {
       "get": {
         "security": [{ "bearerAuth": [] }],
