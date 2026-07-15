@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
@@ -7,6 +7,7 @@ import {
   BottomNav,
   type MainTab,
 } from '../components/navigation/BottomNav';
+import { syncPushRegistration } from '../notifications/registerPush';
 import { MistBackdrop } from '../theme';
 import { BankScreen } from './BankScreen';
 import { CreateDriveSheet } from './CreateDriveSheet';
@@ -26,6 +27,10 @@ export function MainShell() {
   );
   const [profileOpen, setProfileOpen] = useState(false);
   const [boardRefresh, setBoardRefresh] = useState(0);
+
+  useEffect(() => {
+    void syncPushRegistration();
+  }, []);
 
   const bumpBoard = () => {
     setTab('home');
