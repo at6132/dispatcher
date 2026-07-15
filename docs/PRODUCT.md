@@ -63,7 +63,7 @@ Completed jobs appear on the driver’s profile. All completed jobs are visible 
 
 - On complete: store cost; create **10% balance owed to the poster by the completing driver**
 - Driver pays poster **outside the app** (Zelle, Venmo, cash, etc.)
-- Poster marks **Got paid / settled** in-app
+- Poster marks **Got paid / settled** in-app (optional Zelle / bank confirmation screenshot)
 - If not settled by **Sunday 11:59pm** → **completing driver’s account locked** until cleared
 
 ## Privacy

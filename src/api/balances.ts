@@ -39,12 +39,17 @@ export async function listBalances(): Promise<ListBalancesResult> {
 
 export async function settleBalance(
   balanceId: string,
+  opts?: { settlementProofKey?: string },
 ): Promise<{ id: string; status: BalanceStatus; settledAt?: string }> {
   const data = await apiFetch<{
     balance: { id: string; status: BalanceStatus; settledAt?: string };
   }>(`/v1/balances/${balanceId}/settle`, {
     method: 'POST',
-    body: JSON.stringify({}),
+    body: JSON.stringify({
+      ...(opts?.settlementProofKey
+        ? { settlementProofKey: opts.settlementProofKey }
+        : {}),
+    }),
   });
   return data.balance;
 }

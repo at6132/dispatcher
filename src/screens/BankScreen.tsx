@@ -11,7 +11,6 @@ import { Landmark } from 'lucide-react-native';
 
 import {
   listBalances,
-  settleBalance,
   type Balance,
   type BalanceParty,
 } from '../api/balances';
@@ -22,6 +21,10 @@ import { bottomNavClearance } from '../components/navigation/BottomNav';
 import { Button } from '../components/ui/Button';
 import { Icon } from '../components/ui/Icon';
 import { LoadingHint } from '../components/ui/LoadingHint';
+import {
+  SettlePaidModal,
+  type SettlePaidTarget,
+} from '../components/ui/SettlePaidModal';
 import { GlassSurface, colors, fonts, space, type } from '../theme';
 
 type OweGroup = {
@@ -132,8 +135,9 @@ export function BankScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [settlingKey, setSettlingKey] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [settleTarget, setSettleTarget] = useState<SettlePaidTarget | null>(
+    null,
+  );
 
   const load = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
     if (mode === 'refresh') setRefreshing(true);
@@ -164,20 +168,14 @@ export function BankScreen() {
   );
   const youOweCents = youOweGroups.reduce((sum, g) => sum + g.amountCents, 0);
 
-  const onSettleGroup = async (group: OweGroup) => {
-    setActionError(null);
-    setSettlingKey(group.key);
-    try {
-      for (const id of group.balanceIds) {
-        await settleBalance(id);
-      }
-      await load('refresh');
-    } catch (err) {
-      setActionError(mapApiError(err).message);
-      await load('refresh');
-    } finally {
-      setSettlingKey(null);
-    }
+  const openSettle = (group: OweGroup) => {
+    setSettleTarget({
+      key: group.key,
+      name: group.party.name,
+      amountLabel: formatUsd(group.amountCents),
+      tripLabel: formatTrips(group.tripCount),
+      balanceIds: group.balanceIds,
+    });
   };
 
   return (
@@ -199,7 +197,7 @@ export function BankScreen() {
         />
       }
     >
-      <View style={styles.hero}>
+      <View style={[styles.hero, { paddingRight: 40 + space.md }]}>
         <Text style={styles.eyebrow}>Balances</Text>
         <Text style={styles.title}>
           <Text style={styles.titleLead}>Your </Text>
@@ -249,10 +247,6 @@ export function BankScreen() {
               </View>
             </View>
           </GlassSurface>
-
-          {actionError ? (
-            <Text style={styles.actionError}>{actionError}</Text>
-          ) : null}
 
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>You owe</Text>
@@ -324,9 +318,7 @@ export function BankScreen() {
                     ) : null}
                     <Button
                       variant="primary"
-                      loading={settlingKey === g.key}
-                      disabled={settlingKey != null}
-                      onPress={() => void onSettleGroup(g)}
+                      onPress={() => openSettle(g)}
                       style={styles.settleBtn}
                     >
                       Got paid
@@ -338,6 +330,16 @@ export function BankScreen() {
           </View>
         </>
       )}
+
+      <SettlePaidModal
+        visible={settleTarget != null}
+        target={settleTarget}
+        onClose={() => setSettleTarget(null)}
+        onSettled={() => {
+          setSettleTarget(null);
+          void load('refresh');
+        }}
+      />
     </ScrollView>
   );
 }
@@ -455,12 +457,6 @@ const styles = StyleSheet.create({
   errorText: {
     ...type.body,
     color: colors.danger,
-  },
-  actionError: {
-    ...type.caption,
-    color: colors.danger,
-    marginBottom: space.md,
-    paddingLeft: space.xs,
   },
   empty: {
     ...type.body,
