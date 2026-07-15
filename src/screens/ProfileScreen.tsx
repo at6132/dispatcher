@@ -17,6 +17,13 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChevronLeft, ChevronRight, Pencil, Settings, X } from 'lucide-react-native';
 
 import { mapApiError } from '../api/errors';
+import {
+  getNotificationPrefs,
+  updateNotificationPrefs,
+  type DriveStatusPrefMode,
+  type NotificationPrefMode,
+  type NotificationPrefs,
+} from '../api/notifications';
 import { useAuth } from '../auth/AuthContext';
 import {
   buildOnboardingProfile,
@@ -40,6 +47,23 @@ import { PhotoPickerField } from '../components/ui/PhotoPickerField';
 import { TextField } from '../components/ui/TextField';
 import { MistBackdrop, colors, fonts, space, type } from '../theme';
 
+const PREF_OPTIONS: { value: NotificationPrefMode; label: string }[] = [
+  { value: 'off', label: 'Off' },
+  { value: 'all', label: 'Everyone' },
+  { value: 'favorites', label: 'Favorites only' },
+];
+
+const DRIVE_STATUS_OPTIONS: { value: DriveStatusPrefMode; label: string }[] = [
+  { value: 'off', label: 'Off' },
+  { value: 'all', label: 'On' },
+];
+
+const DEFAULT_PREFS: NotificationPrefs = {
+  newApplication: 'all',
+  driveStatus: 'all',
+  applicationAccepted: 'all',
+  newDrivePosted: 'all',
+};
 type ProfileScreenProps = {
   visible: boolean;
   onClose: () => void;
@@ -76,6 +100,11 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [completedCount, setCompletedCount] = useState(0);
+  const [notifPrefs, setNotifPrefs] =
+    useState<NotificationPrefs>(DEFAULT_PREFS);
+  const [notifLoading, setNotifLoading] = useState(false);
+  const [notifSaving, setNotifSaving] = useState(false);
+  const [notifError, setNotifError] = useState<string | null>(null);
 
   const syncFromUser = () => {
     if (!user) return;
@@ -159,10 +188,54 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
     Keyboard.dismiss();
     setEditing(false);
     setSettingsOpen(true);
+    setNotifError(null);
+    setNotifLoading(true);
+    void getNotificationPrefs()
+      .then((prefs) => {
+        setNotifPrefs({
+          newApplication: prefs.newApplication,
+          driveStatus:
+            prefs.driveStatus === 'favorites' ? 'all' : prefs.driveStatus,
+          applicationAccepted: prefs.applicationAccepted,
+          newDrivePosted: prefs.newDrivePosted,
+        });
+      })
+      .catch((err) => {
+        setNotifError(mapApiError(err).message);
+      })
+      .finally(() => {
+        setNotifLoading(false);
+      });
   };
 
   const closeSettings = () => {
     setSettingsOpen(false);
+  };
+
+  const patchNotifPref = async <K extends keyof NotificationPrefs>(
+    key: K,
+    value: NotificationPrefs[K],
+  ) => {
+    const prev = notifPrefs;
+    const next = { ...prev, [key]: value };
+    setNotifPrefs(next);
+    setNotifError(null);
+    setNotifSaving(true);
+    try {
+      const saved = await updateNotificationPrefs({ [key]: value });
+      setNotifPrefs({
+        newApplication: saved.newApplication,
+        driveStatus:
+          saved.driveStatus === 'favorites' ? 'all' : saved.driveStatus,
+        applicationAccepted: saved.applicationAccepted,
+        newDrivePosted: saved.newDrivePosted,
+      });
+    } catch (err) {
+      setNotifPrefs(prev);
+      setNotifError(mapApiError(err).message);
+    } finally {
+      setNotifSaving(false);
+    }
   };
 
   const nameError = submitted ? validateName(name) : undefined;
@@ -315,10 +388,72 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
                   </Text>
 
                   <View style={styles.settingsSection}>
-                    <Text style={styles.statLabel}>Notification settings</Text>
-                    <View style={styles.comingSoonCard}>
-                      <Text style={styles.comingSoon}>Coming soon</Text>
-                    </View>
+                    <Text style={styles.statLabel}>When you post</Text>
+                    {notifLoading ? (
+                      <LoadingHint label="Loading…" variant="inline" />
+                    ) : (
+                      <View style={styles.notifStack}>
+                        <ChoiceGroup
+                          label="New applications"
+                          options={PREF_OPTIONS}
+                          value={notifPrefs.newApplication}
+                          onChange={(v) =>
+                            void patchNotifPref('newApplication', v)
+                          }
+                        />
+                        <Text style={styles.notifHint}>
+                          Favorites only = favorited drivers who apply.
+                        </Text>
+                        <ChoiceGroup
+                          label="Ride status changes"
+                          options={DRIVE_STATUS_OPTIONS}
+                          value={notifPrefs.driveStatus}
+                          onChange={(v) =>
+                            void patchNotifPref('driveStatus', v)
+                          }
+                        />
+                        <Text style={styles.notifHint}>
+                          Picked up, completed, or cancelled.
+                        </Text>
+                      </View>
+                    )}
+                  </View>
+
+                  <View style={styles.settingsSection}>
+                    <Text style={styles.statLabel}>When you drive</Text>
+                    {notifLoading ? null : (
+                      <View style={styles.notifStack}>
+                        <ChoiceGroup
+                          label="You got accepted"
+                          options={PREF_OPTIONS}
+                          value={notifPrefs.applicationAccepted}
+                          onChange={(v) =>
+                            void patchNotifPref('applicationAccepted', v)
+                          }
+                        />
+                        <Text style={styles.notifHint}>
+                          Favorites only = favorited dispatchers.
+                        </Text>
+                        <ChoiceGroup
+                          label="New drives posted"
+                          options={PREF_OPTIONS}
+                          value={notifPrefs.newDrivePosted}
+                          onChange={(v) =>
+                            void patchNotifPref('newDrivePosted', v)
+                          }
+                        />
+                        <Text style={styles.notifHint}>
+                          Any new board post. Favorites = favorited
+                          dispatchers only.
+                        </Text>
+                      </View>
+                    )}
+                    {notifSaving ? (
+                      <LoadingHint label="Saving…" variant="inline" />
+                    ) : null}
+                    {notifError ? (
+                      <Text style={styles.formError}>{notifError}</Text>
+                    ) : null}
                   </View>
                 </View>
               ) : (
@@ -687,6 +822,14 @@ const styles = StyleSheet.create({
   settingsSection: {
     gap: space.md,
     marginTop: space.sm,
+  },
+  notifStack: {
+    gap: space.lg,
+  },
+  notifHint: {
+    ...type.caption,
+    color: colors.faint,
+    marginTop: -space.sm,
   },
   comingSoonCard: {
     paddingVertical: space.xl,
