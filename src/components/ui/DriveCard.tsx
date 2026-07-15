@@ -382,10 +382,17 @@ export function DriveCard({
 
   return (
     <View
-      style={[styles.card, showMap && styles.cardWithMap]}
+      style={[
+        styles.card,
+        showMap && styles.cardWithMap,
+        drive.posterIsFavorite && styles.cardFavorite,
+      ]}
       accessibilityRole="summary"
-      accessibilityLabel={`${drive.routeText}, ${status}`}
+      accessibilityLabel={`${drive.routeText}, ${status}${drive.posterIsFavorite ? ', favorite dispatcher' : ''}`}
     >
+      {drive.posterIsFavorite ? (
+        <Text style={styles.favoriteLabel}>Favorite</Text>
+      ) : null}
       {showMap ? (
         <Pressable
           style={styles.mapWrap}
@@ -780,6 +787,17 @@ const styles = StyleSheet.create({
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.glassBorder,
     backgroundColor: colors.glass,
+  },
+  cardFavorite: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentMuted,
+  },
+  favoriteLabel: {
+    ...type.label,
+    color: colors.accent,
+    textTransform: 'uppercase',
+    paddingTop: space.sm,
+    paddingHorizontal: space.md,
   },
   cardWithMap: {
     overflow: 'hidden',

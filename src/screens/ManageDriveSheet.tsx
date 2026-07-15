@@ -40,6 +40,7 @@ import { LoadingHint } from '../components/ui/LoadingHint';
 import { NumberStepper } from '../components/ui/NumberStepper';
 import { TextField } from '../components/ui/TextField';
 import { MistBackdrop, colors, fonts, radius, space, type } from '../theme';
+import { PublicProfileScreen } from './PublicProfileScreen';
 
 type ManageTab = 'applicants' | 'status' | 'details';
 
@@ -108,6 +109,10 @@ export function ManageDriveSheet({
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [viewingDriverId, setViewingDriverId] = useState<string | null>(null);
+  const [viewingSeed, setViewingSeed] = useState<
+    DriveApplication['driver'] | null
+  >(null);
 
   const [title, setTitle] = useState('');
   const [phone, setPhone] = useState('');
@@ -163,6 +168,8 @@ export function ManageDriveSheet({
       setApps([]);
       setAcceptingId(null);
       setClearing(false);
+      setViewingDriverId(null);
+      setViewingSeed(null);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps -- visibility-driven
   }, [visible, drive?.id]);
@@ -273,7 +280,14 @@ export function ManageDriveSheet({
   if (!sheetDrive || (!visible && !mounted)) return null;
 
   const isOpen = sheetDrive.status === 'open';
-  const pendingApps = apps.filter((a) => a.status === 'pending');
+  const pendingApps = apps
+    .filter((a) => a.status === 'pending')
+    .slice()
+    .sort((a, b) => {
+      const fav = Number(Boolean(b.isFavorite)) - Number(Boolean(a.isFavorite));
+      if (fav !== 0) return fav;
+      return b.createdAt.localeCompare(a.createdAt);
+    });
   const openSubmissions = apps.filter(
     (a) => a.status === 'pending' || a.status === 'rejected',
   );
@@ -306,6 +320,7 @@ export function ManageDriveSheet({
       : null;
 
   return (
+    <>
     <Modal
       visible
       transparent
@@ -438,27 +453,45 @@ export function ManageDriveSheet({
                         const accepting = acceptingId === app.id;
                         return (
                           <View key={app.id} style={styles.appRow}>
-                            <DriverCard
-                              name={app.driver.name}
-                              vehicleType={
-                                app.driver.onboarding?.vehicleType
+                            <Pressable
+                              accessibilityRole="button"
+                              accessibilityLabel={`Open ${app.driver.name}'s profile`}
+                              onPress={() => {
+                                setViewingSeed({
+                                  ...app.driver,
+                                  ...(app.isFavorite
+                                    ? { isFavorite: true as const }
+                                    : {}),
+                                });
+                                setViewingDriverId(app.driver.id);
+                              }}
+                              style={({ pressed }) =>
+                                pressed ? styles.cardPressed : undefined
                               }
-                              phone={
-                                app.driver.phone
-                                  ? formatPhoneDisplay(app.driver.phone)
-                                  : undefined
-                              }
-                              detail={applicantDetail(app)}
-                              photoUri={app.driver.onboarding?.selfPhotoUri}
-                              vehicleInteriorUri={
-                                app.driver.onboarding?.vehicleInteriorUri
-                              }
-                              vehicleExteriorUri={
-                                app.driver.onboarding?.vehicleExteriorUri
-                              }
-                              coordinate={coord}
-                              showMap={Boolean(coord)}
-                            />
+                            >
+                              <DriverCard
+                                name={app.driver.name}
+                                vehicleType={
+                                  app.driver.onboarding?.vehicleType
+                                }
+                                phone={
+                                  app.driver.phone
+                                    ? formatPhoneDisplay(app.driver.phone)
+                                    : undefined
+                                }
+                                detail={applicantDetail(app)}
+                                photoUri={app.driver.onboarding?.selfPhotoUri}
+                                vehicleInteriorUri={
+                                  app.driver.onboarding?.vehicleInteriorUri
+                                }
+                                vehicleExteriorUri={
+                                  app.driver.onboarding?.vehicleExteriorUri
+                                }
+                                coordinate={coord}
+                                showMap={Boolean(coord)}
+                                highlighted={Boolean(app.isFavorite)}
+                              />
+                            </Pressable>
                             <Button
                               loading={accepting}
                               disabled={busy}
@@ -521,32 +554,50 @@ export function ManageDriveSheet({
                   {statusDriver ? (
                     <View style={styles.statusDriver}>
                       <Text style={styles.statusEyebrow}>Driver</Text>
-                      <DriverCard
-                        name={statusDriver.name}
-                        vehicleType={statusDriver.onboarding?.vehicleType}
-                        phone={
-                          acceptedApp?.driver.phone
-                            ? formatPhoneDisplay(acceptedApp.driver.phone)
-                            : undefined
+                      <Pressable
+                        accessibilityRole="button"
+                        accessibilityLabel={`Open ${statusDriver.name}'s profile`}
+                        onPress={() => {
+                          setViewingSeed({
+                            ...statusDriver,
+                            ...(acceptedApp?.isFavorite
+                              ? { isFavorite: true as const }
+                              : {}),
+                          });
+                          setViewingDriverId(statusDriver.id);
+                        }}
+                        style={({ pressed }) =>
+                          pressed ? styles.cardPressed : undefined
                         }
-                        detail={applicantDetail(
-                          acceptedApp ?? {
-                            id: '',
-                            status: 'accepted',
-                            createdAt: '',
-                            driver: statusDriver,
-                          },
-                        )}
-                        photoUri={statusDriver.onboarding?.selfPhotoUri}
-                        vehicleInteriorUri={
-                          statusDriver.onboarding?.vehicleInteriorUri
-                        }
-                        vehicleExteriorUri={
-                          statusDriver.onboarding?.vehicleExteriorUri
-                        }
-                        coordinate={statusCoord}
-                        showMap
-                      />
+                      >
+                        <DriverCard
+                          name={statusDriver.name}
+                          vehicleType={statusDriver.onboarding?.vehicleType}
+                          phone={
+                            acceptedApp?.driver.phone
+                              ? formatPhoneDisplay(acceptedApp.driver.phone)
+                              : undefined
+                          }
+                          detail={applicantDetail(
+                            acceptedApp ?? {
+                              id: '',
+                              status: 'accepted',
+                              createdAt: '',
+                              driver: statusDriver,
+                            },
+                          )}
+                          photoUri={statusDriver.onboarding?.selfPhotoUri}
+                          vehicleInteriorUri={
+                            statusDriver.onboarding?.vehicleInteriorUri
+                          }
+                          vehicleExteriorUri={
+                            statusDriver.onboarding?.vehicleExteriorUri
+                          }
+                          coordinate={statusCoord}
+                          showMap
+                          highlighted={Boolean(acceptedApp?.isFavorite)}
+                        />
+                      </Pressable>
                     </View>
                   ) : (
                     <View style={styles.emptyBlock}>
@@ -678,6 +729,46 @@ export function ManageDriveSheet({
         </View>
       </View>
     </Modal>
+    <PublicProfileScreen
+      visible={viewingDriverId != null}
+      userId={viewingDriverId}
+      seed={viewingSeed}
+      onClose={() => {
+        setViewingDriverId(null);
+        setViewingSeed(null);
+      }}
+      onFavoriteChange={(driverId, isFavorite) => {
+        setApps((prev) =>
+          prev.map((a) =>
+            a.driver.id === driverId
+              ? {
+                  ...a,
+                  ...(isFavorite
+                    ? { isFavorite: true as const }
+                    : { isFavorite: undefined }),
+                  driver: {
+                    ...a.driver,
+                    ...(isFavorite
+                      ? { isFavorite: true as const }
+                      : { isFavorite: undefined }),
+                  },
+                }
+              : a,
+          ),
+        );
+        setViewingSeed((prev) =>
+          prev && prev.id === driverId
+            ? {
+                ...prev,
+                ...(isFavorite
+                  ? { isFavorite: true as const }
+                  : { isFavorite: undefined }),
+              }
+            : prev,
+        );
+      }}
+    />
+    </>
   );
 }
 
@@ -797,6 +888,9 @@ const styles = StyleSheet.create({
   },
   appRow: {
     gap: space.sm,
+  },
+  cardPressed: {
+    opacity: 0.88,
   },
   clearBlock: {
     gap: space.xs,

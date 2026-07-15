@@ -118,6 +118,7 @@ export function HomeScreen({
   });
   const [applyingId, setApplyingId] = useState<string | null>(null);
   const [appliedIds, setAppliedIds] = useState<Set<string>>(() => new Set());
+  const applyingIdsRef = useRef<Set<string>>(new Set());
   const [applyError, setApplyError] = useState<string | null>(null);
   const [completingDrive, setCompletingDrive] = useState<DriveListItem | null>(
     null,
@@ -146,11 +147,20 @@ export function HomeScreen({
           : null;
         const items =
           board === 'open'
-            ? result.items.filter(
-                (d) =>
-                  d.status === 'open' &&
-                  driverMatchesOpenDrive(capacity, d, user?.id),
-              )
+            ? result.items
+                .filter(
+                  (d) =>
+                    d.status === 'open' &&
+                    driverMatchesOpenDrive(capacity, d, user?.id),
+                )
+                .slice()
+                .sort((a, b) => {
+                  const fav =
+                    Number(Boolean(b.posterIsFavorite)) -
+                    Number(Boolean(a.posterIsFavorite));
+                  if (fav !== 0) return fav;
+                  return b.createdAt.localeCompare(a.createdAt);
+                })
             : result.items;
         setBoards((prev) => ({
           ...prev,
@@ -163,13 +173,16 @@ export function HomeScreen({
           },
         }));
         if (board === 'open') {
+          // Only clear local “Applied” when the server says cleared/rejected.
+          // Do not wipe on null — a stale in-flight refresh can land after
+          // apply and would flip Applied back to Apply.
           setAppliedIds((prev) => {
             const next = new Set(prev);
             for (const item of items) {
               const status = item.viewerApplicationStatus;
               if (status === 'pending' || status === 'accepted') {
                 next.add(item.id);
-              } else if (status === 'cleared' || status == null) {
+              } else if (status === 'cleared' || status === 'rejected') {
                 next.delete(item.id);
               }
             }
@@ -272,21 +285,57 @@ export function HomeScreen({
         )
       : thumbTranslate;
 
+  const markApplied = (driveId: string) => {
+    setAppliedIds((prev) => new Set(prev).add(driveId));
+    setBoards((prev) => ({
+      ...prev,
+      open: {
+        ...prev.open,
+        items: prev.open.items.map((d) =>
+          d.id === driveId
+            ? { ...d, viewerApplicationStatus: 'pending' as const }
+            : d,
+        ),
+      },
+    }));
+  };
+
   const onApply = async (driveId: string) => {
+    if (applyingIdsRef.current.has(driveId)) return;
+    applyingIdsRef.current.add(driveId);
     setApplyError(null);
     setApplyingId(driveId);
+    // Optimistic — Applied must not wait on GPS / network, and must not
+    // bounce back if a stale board refresh finishes mid-request.
+    markApplied(driveId);
     try {
       const coords = await getCachedCoordinate();
       await applyToDrive(driveId, coords ?? undefined);
-      setAppliedIds((prev) => new Set(prev).add(driveId));
     } catch (err) {
       const mapped = mapApiError(err);
       if (mapped.code === 'already_applied') {
-        setAppliedIds((prev) => new Set(prev).add(driveId));
+        markApplied(driveId);
       } else {
+        setAppliedIds((prev) => {
+          const next = new Set(prev);
+          next.delete(driveId);
+          return next;
+        });
+        setBoards((prev) => ({
+          ...prev,
+          open: {
+            ...prev.open,
+            items: prev.open.items.map((d) =>
+              d.id === driveId
+                ? { ...d, viewerApplicationStatus: undefined }
+                : d,
+            ),
+          },
+        }));
         setApplyError(mapped.message);
       }
     } finally {
+      applyingIdsRef.current.delete(driveId);
       setApplyingId(null);
     }
   };
@@ -373,7 +422,7 @@ export function HomeScreen({
       status === 'accepted';
     const applyAgain = !applied && status === 'cleared';
     const canApply =
-      board === 'open' && status !== 'rejected';
+      board === 'open' && !applied && status !== 'rejected';
     return (
       <DriveCard
         drive={item}
@@ -432,6 +481,8 @@ export function HomeScreen({
           {
             paddingTop: insets.top + space.lg,
             paddingHorizontal: space.xl,
+            // Room for the floating profile PFP (40px) + gap
+            paddingRight: space.xl + 40 + space.md,
           },
         ]}
       >

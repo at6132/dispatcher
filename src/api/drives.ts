@@ -14,6 +14,9 @@ export type PublicProfile = {
   id: string;
   name: string;
   onboardingComplete: boolean;
+  completedDrivesCount?: number;
+  /** True when the viewer has favorited this user. */
+  isFavorite?: boolean;
   onboarding?: {
     vehicleClass: VehicleClass;
     vehicleType: string;
@@ -51,6 +54,8 @@ export type Drive = {
   updatedAt: string;
   completedAt?: string;
   viewerApplicationStatus?: ApplicationStatus;
+  /** True when the viewer favorited the poster. */
+  posterIsFavorite?: boolean;
 };
 
 export type CreateDriveInput = {
@@ -97,6 +102,7 @@ function asListItem(raw: Drive & { poster?: PublicProfile; assignee?: PublicProf
       id: raw.posterId,
       name: 'Driver',
       onboardingComplete: false,
+      completedDrivesCount: 0,
     },
     ...(raw.assignee ? { assignee: raw.assignee } : {}),
   };
@@ -151,6 +157,8 @@ export type DriveApplication = {
   lat?: number;
   lng?: number;
   createdAt: string;
+  /** True when the poster favorited this applicant. */
+  isFavorite?: boolean;
   driver: PublicProfile & { phone?: string };
 };
 
