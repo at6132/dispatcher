@@ -51,6 +51,7 @@ Shipping stack: Expo SDK 54, React Native, tokens + surfaces in `src/theme`.
 - **Driver listing** (`DriverCard`): profile surface — PFP avatar, `Name · VehicleType` same size on one line, phone, seats/years detail, optional exterior/interior thumbs
 - **Photos step**: circular PFP for “You”; rectangular pickers for vehicle interior / exterior (max one each). Shared pick queue — don’t block sibling slots
 - **Location step**: permission only — no driver-card preview on that screen. Expo Go maxes at While Using; Always needs a native build
+- **Notifications step**: after location; permission prompt only (optional — can continue without). Mirror `LocationAccessPrompt` / `NotificationAccessPrompt`
 - **You’re in**: driver card + “Need to make changes? Go to Settings.” — no map chrome there
 - Dismiss keyboard on empty taps / continue / back during forms
 
