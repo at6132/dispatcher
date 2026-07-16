@@ -72,6 +72,7 @@ function toSendTarget(item: ProfileListItem): DirectSendTarget {
     vehicleInteriorUri: o?.vehicleInteriorUri,
     vehicleExteriorUri: o?.vehicleExteriorUri,
     detail: detailParts.length ? detailParts.join(' · ') : undefined,
+    ...(o?.extraInfo?.trim() ? { notes: o.extraInfo.trim() } : {}),
     ...(lat != null && Number.isFinite(lat) ? { lastLat: lat } : {}),
     ...(lng != null && Number.isFinite(lng) ? { lastLng: lng } : {}),
   };

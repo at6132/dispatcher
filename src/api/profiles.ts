@@ -19,6 +19,7 @@ export type DirectSendTarget = {
   vehicleInteriorUri?: string;
   vehicleExteriorUri?: string;
   detail?: string;
+  notes?: string;
   lastLat?: number;
   lastLng?: number;
 };

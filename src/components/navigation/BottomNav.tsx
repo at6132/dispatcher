@@ -27,7 +27,7 @@ import {
   type DockGeom,
 } from './dockPath';
 
-export type MainTab = 'home' | 'profiles' | 'bank';
+export type MainTab = 'home' | 'profiles' | 'bank' | 'you';
 
 /** Window coords of the + face — used to warp the compose screen open. */
 export type AddOrigin = {
@@ -41,8 +41,6 @@ type BottomNavProps = {
   active: MainTab;
   onChange: (tab: MainTab) => void;
   onAddPress?: (origin: AddOrigin) => void;
-  onProfilePress?: () => void;
-  profileActive?: boolean;
 };
 
 /**
@@ -80,8 +78,6 @@ export function BottomNav({
   active,
   onChange,
   onAddPress,
-  onProfilePress,
-  profileActive = false,
 }: BottomNavProps) {
   const insets = useSafeAreaInsets();
   const bottomPad = Math.max(insets.bottom, space.sm);
@@ -111,13 +107,13 @@ export function BottomNav({
           <View style={styles.tabCluster}>
             <NavItem
               label="Home"
-              active={active === 'home' && !profileActive}
+              active={active === 'home'}
               onPress={() => onChange('home')}
               icon={Home}
             />
             <NavItem
               label="People"
-              active={active === 'profiles' && !profileActive}
+              active={active === 'profiles'}
               onPress={() => onChange('profiles')}
               icon={Users}
             />
@@ -126,13 +122,13 @@ export function BottomNav({
           <View style={[styles.tabCluster, styles.tabClusterRight]}>
             <NavItem
               label="Bank"
-              active={active === 'bank' && !profileActive}
+              active={active === 'bank'}
               onPress={() => onChange('bank')}
               icon={Landmark}
             />
             <ProfileNavItem
-              active={profileActive}
-              onPress={() => onProfilePress?.()}
+              active={active === 'you'}
+              onPress={() => onChange('you')}
             />
           </View>
         </View>

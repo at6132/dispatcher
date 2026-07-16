@@ -91,6 +91,11 @@ function toSendTargetFromProfile(
     detail: detailParts.length
       ? detailParts.join(' · ')
       : fallback.detail,
+    ...(o?.extraInfo?.trim()
+      ? { notes: o.extraInfo.trim() }
+      : fallback.notes
+        ? { notes: fallback.notes }
+        : {}),
     ...(item.lastLat != null
       ? { lastLat: Number(item.lastLat) }
       : fallback.lastLat != null
@@ -407,6 +412,7 @@ export function CreateDriveSheet({
                       ]
                         .filter(Boolean)
                         .join(' · ')}
+                      notes={(liveTarget ?? directTo).notes}
                       photoUri={(liveTarget ?? directTo).photoUri}
                       vehicleInteriorUri={
                         (liveTarget ?? directTo).vehicleInteriorUri

@@ -1,11 +1,8 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useState } from 'react';
 import {
-  Animated,
-  Easing,
   Image,
   Keyboard,
   KeyboardAvoidingView,
-  Modal,
   Platform,
   Pressable,
   ScrollView,
@@ -14,7 +11,7 @@ import {
   View,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { ChevronLeft, ChevronRight, Pencil, Settings, X } from 'lucide-react-native';
+import { ChevronLeft, Pencil, Settings } from 'lucide-react-native';
 
 import { mapApiError } from '../api/errors';
 import {
@@ -25,6 +22,10 @@ import {
   type NotificationPrefMode,
   type NotificationPrefs,
 } from '../api/notifications';
+import {
+  listProfileHistory,
+  type ProfileTripHistoryItem,
+} from '../api/profiles';
 import { useAuth } from '../auth/AuthContext';
 import {
   buildOnboardingProfile,
@@ -38,6 +39,7 @@ import {
 } from '../auth/types';
 import { getSessionUser } from '../auth/sessionStore';
 import { formatPhoneDisplay, validateName } from '../auth/validation';
+import { bottomNavClearance } from '../components/navigation/BottomNav';
 import { Button } from '../components/ui/Button';
 import { ChoiceGroup } from '../components/ui/ChoiceGroup';
 import { DriverCard } from '../components/ui/DriverCard';
@@ -46,7 +48,7 @@ import { LoadingHint } from '../components/ui/LoadingHint';
 import { NumberStepper } from '../components/ui/NumberStepper';
 import { PhotoPickerField } from '../components/ui/PhotoPickerField';
 import { TextField } from '../components/ui/TextField';
-import { MistBackdrop, colors, fonts, space, type } from '../theme';
+import { colors, fonts, radius, space, type } from '../theme';
 
 const PREF_OPTIONS: { value: NotificationPrefMode; label: string }[] = [
   { value: 'off', label: 'Off' },
@@ -67,11 +69,6 @@ const DEFAULT_PREFS: NotificationPrefs = {
   cancelRequest: 'all',
   applicationCleared: 'all',
 };
-type ProfileScreenProps = {
-  visible: boolean;
-  onClose: () => void;
-};
-
 function vehicleClassLabel(value: VehicleClass | undefined): string | undefined {
   if (!value) return undefined;
   return VEHICLE_CLASS_OPTIONS.find((o) => o.value === value)?.label;
@@ -81,13 +78,24 @@ function drivesLabel(count: number): string {
   return count === 1 ? '1 completed drive' : `${count} completed drives`;
 }
 
-export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
+function formatMoney(cents: number): string {
+  return `$${(cents / 100).toFixed(cents % 100 === 0 ? 0 : 2)}`;
+}
+
+function formatWhen(iso: string): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+  });
+}
+
+export function ProfileScreen() {
   const insets = useSafeAreaInsets();
   const { user, updateProfile } = useAuth();
-  const [mounted, setMounted] = useState(visible);
   const [editing, setEditing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const progress = useRef(new Animated.Value(0)).current;
 
   const [name, setName] = useState('');
   const [vehicleClass, setVehicleClass] = useState<VehicleClass | null>(null);
@@ -103,6 +111,9 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
   const [saving, setSaving] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
   const [completedCount, setCompletedCount] = useState(0);
+  const [history, setHistory] = useState<ProfileTripHistoryItem[]>([]);
+  const [historyLoading, setHistoryLoading] = useState(false);
+  const [historyError, setHistoryError] = useState<string | null>(null);
   const [notifPrefs, setNotifPrefs] =
     useState<NotificationPrefs>(DEFAULT_PREFS);
   const [notifLoading, setNotifLoading] = useState(false);
@@ -129,51 +140,49 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
   };
 
   useEffect(() => {
-    if (visible) {
-      setMounted(true);
-      setEditing(false);
-      setSettingsOpen(false);
-      syncFromUser();
-      progress.setValue(0);
-      Animated.timing(progress, {
-        toValue: 1,
-        duration: 320,
-        easing: Easing.bezier(0.22, 1, 0.36, 1),
-        useNativeDriver: true,
-      }).start();
-      void getSessionUser()
-        .then((fresh) => {
-          if (fresh?.completedDrivesCount != null) {
-            setCompletedCount(fresh.completedDrivesCount);
-          }
-        })
-        .catch(() => {
-          /* keep cached count */
-        });
+    setEditing(false);
+    setSettingsOpen(false);
+    syncFromUser();
+    void getSessionUser()
+      .then((fresh) => {
+        if (fresh?.completedDrivesCount != null) {
+          setCompletedCount(fresh.completedDrivesCount);
+        }
+      })
+      .catch(() => {
+        /* keep cached count */
+      });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- mount sync
+  }, []);
+
+  useEffect(() => {
+    const userId = user?.id;
+    if (!userId) {
+      setHistory([]);
+      setHistoryError(null);
+      setHistoryLoading(false);
       return;
     }
-
-    if (!mounted) return;
-    Animated.timing(progress, {
-      toValue: 0,
-      duration: 220,
-      easing: Easing.bezier(0.4, 0, 1, 0.2),
-      useNativeDriver: true,
-    }).start(({ finished }) => {
-      if (finished) {
-        setMounted(false);
-        setEditing(false);
-        setSettingsOpen(false);
+    let cancelled = false;
+    setHistoryLoading(true);
+    setHistoryError(null);
+    void (async () => {
+      try {
+        const data = await listProfileHistory(userId, { limit: 30 });
+        if (cancelled) return;
+        setHistory(data.items ?? []);
+      } catch {
+        if (cancelled) return;
+        setHistory([]);
+        setHistoryError('Couldn’t load drives.');
+      } finally {
+        if (!cancelled) setHistoryLoading(false);
       }
-    });
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- visibility-driven
-  }, [visible]);
-
-  const requestClose = () => {
-    if (saving) return;
-    Keyboard.dismiss();
-    onClose();
-  };
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
 
   const startEdit = () => {
     setSettingsOpen(false);
@@ -291,96 +300,94 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
   const classLabel = vehicleClassLabel(ob?.vehicleClass);
   if (classLabel) detailParts.push(classLabel);
 
-  if (!mounted) return null;
+  const showBack = editing || settingsOpen;
 
   return (
-    <Modal
-      visible={mounted}
-      transparent
-      animationType="none"
-      statusBarTranslucent
-      presentationStyle="overFullScreen"
-      onRequestClose={requestClose}
+    <KeyboardAvoidingView
+      style={styles.root}
+      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
     >
-      <Animated.View style={[styles.root, { opacity: progress }]}>
-        <MistBackdrop style={styles.fill} />
-        <KeyboardAvoidingView
-          style={styles.flex}
-          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-        >
-          <View style={[styles.topBar, { paddingTop: insets.top + space.sm }]}>
+      <View style={[styles.topBar, { paddingTop: insets.top + space.sm }]}>
+        {showBack ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel={
+              settingsOpen ? 'Back to profile' : 'Cancel editing'
+            }
+            hitSlop={12}
+            disabled={saving}
+            onPress={settingsOpen ? closeSettings : cancelEdit}
+            style={({ pressed }) => [
+              styles.iconBtn,
+              pressed && styles.iconBtnPressed,
+              saving && styles.iconBtnDisabled,
+            ]}
+          >
+            <Icon icon={ChevronLeft} size="md" color={colors.inkSoft} />
+          </Pressable>
+        ) : (
+          <View style={styles.topSpacer} />
+        )}
+        {!editing && !settingsOpen ? (
+          <View style={styles.topActions}>
             <Pressable
               accessibilityRole="button"
-              accessibilityLabel={
-                settingsOpen
-                  ? 'Back to profile'
-                  : editing
-                    ? 'Cancel editing'
-                    : 'Close'
-              }
+              accessibilityLabel="Notification settings"
               hitSlop={12}
-              disabled={saving}
-              onPress={
-                settingsOpen
-                  ? closeSettings
-                  : editing
-                    ? cancelEdit
-                    : requestClose
-              }
+              onPress={openSettings}
               style={({ pressed }) => [
                 styles.iconBtn,
                 pressed && styles.iconBtnPressed,
-                saving && styles.iconBtnDisabled,
               ]}
             >
-              <Icon
-                icon={settingsOpen ? ChevronLeft : X}
-                size="md"
-                color={colors.inkSoft}
-              />
+              <Icon icon={Settings} size="md" color={colors.accent} />
             </Pressable>
-            {!editing && !settingsOpen ? (
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Edit profile"
-                hitSlop={12}
-                onPress={startEdit}
-                style={({ pressed }) => [
-                  styles.editChip,
-                  pressed && styles.iconBtnPressed,
-                ]}
-              >
-                <Icon icon={Pencil} size="sm" color={colors.accent} />
-                <Text style={styles.editChipLabel}>Edit</Text>
-              </Pressable>
-            ) : (
-              <View style={styles.topSpacer} />
-            )}
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Edit profile"
+              hitSlop={12}
+              onPress={startEdit}
+              style={({ pressed }) => [
+                styles.editChip,
+                pressed && styles.iconBtnPressed,
+              ]}
+            >
+              <Icon icon={Pencil} size="sm" color={colors.accent} />
+              <Text style={styles.editChipLabel}>Edit</Text>
+            </Pressable>
           </View>
+        ) : (
+          <View style={styles.topSpacer} />
+        )}
+      </View>
 
-          <ScrollView
-            style={styles.flex}
-            contentContainerStyle={[
-              styles.content,
-              { paddingBottom: insets.bottom + space.xxl },
-            ]}
-            keyboardShouldPersistTaps="handled"
-            keyboardDismissMode="on-drag"
-            showsVerticalScrollIndicator={false}
-          >
+      <ScrollView
+        style={styles.flex}
+        contentContainerStyle={[
+          styles.content,
+          { paddingBottom: bottomNavClearance(insets.bottom) + space.lg },
+        ]}
+        keyboardShouldPersistTaps="handled"
+        keyboardDismissMode="on-drag"
+        showsVerticalScrollIndicator={false}
+      >
             <View>
               {settingsOpen ? (
                 <View style={styles.viewBlock}>
-                  <View style={styles.hero}>
-                    <Text style={styles.lead}>App </Text>
-                    <Text style={styles.trail}>settings</Text>
-                  </View>
+                  <Text
+                    style={styles.lead}
+                    numberOfLines={1}
+                    adjustsFontSizeToFit
+                    minimumFontScale={0.8}
+                  >
+                    Notification <Text style={styles.trail}>settings</Text>
+                  </Text>
                   <Text style={styles.support}>
                     Choose which push notifications you want.
                   </Text>
 
                   <View style={styles.settingsSection}>
-                    <Text style={styles.statLabel}>When you post</Text>
+                    <Text style={styles.settingsSectionTitle}>When you post</Text>
                     {notifLoading ? (
                       <LoadingHint label="Loading…" variant="inline" />
                     ) : (
@@ -423,8 +430,10 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
                     )}
                   </View>
 
+                  <View style={styles.settingsDivider} />
+
                   <View style={styles.settingsSection}>
-                    <Text style={styles.statLabel}>When you drive</Text>
+                    <Text style={styles.settingsSectionTitle}>When you drive</Text>
                     {notifLoading ? null : (
                       <View style={styles.notifStack}>
                         <ChoiceGroup
@@ -480,14 +489,14 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
                 </Text>
                 <Text style={styles.trail}>profile</Text>
               </View>
-              <Text style={styles.support}>
-                {editing
-                  ? 'Update what other drivers see. Drive count stays automatic.'
-                  : 'What other drivers see when they open your profile.'}
-              </Text>
+              {editing ? (
+                <Text style={styles.support}>
+                  Update what other drivers see. Drive count stays automatic.
+                </Text>
+              ) : null}
 
               {!editing ? (
-                <View style={styles.viewBlock}>
+                <View style={[styles.viewBlock, styles.profileViewBlock]}>
                   <DriverCard
                     photoUri={ob?.selfPhotoUri}
                     vehicleInteriorUri={ob?.vehicleInteriorUri}
@@ -500,14 +509,55 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
                         : undefined
                     }
                     detail={detailParts.join(' · ') || undefined}
+                    notes={ob?.extraInfo}
                     showMap={false}
                   />
 
-                  <View style={styles.statRow}>
+                  <View style={styles.historyBlock}>
                     <Text style={styles.statLabel}>Drives</Text>
-                    <Text style={styles.statValue}>
-                      {drivesLabel(completedCount)}
-                    </Text>
+                    {historyLoading ? (
+                      <LoadingHint label="Loading drives…" variant="block" />
+                    ) : historyError ? (
+                      <Text style={styles.historyEmpty}>{historyError}</Text>
+                    ) : history.length === 0 ? (
+                      <Text style={styles.historyEmpty}>
+                        No completed drives yet.
+                      </Text>
+                    ) : (
+                      <View style={styles.historyList}>
+                        {history.map((trip) => {
+                          const when = formatWhen(
+                            trip.completedAt ?? trip.createdAt,
+                          );
+                          const tripLabel =
+                            trip.tripType === 'round_trip'
+                              ? 'Round trip'
+                              : 'One way';
+                          const meta = [
+                            when,
+                            tripLabel,
+                            trip.costCents != null
+                              ? formatMoney(trip.costCents)
+                              : null,
+                          ]
+                            .filter(Boolean)
+                            .join(' · ');
+                          return (
+                            <View key={trip.id} style={styles.historyRow}>
+                              <Text
+                                style={styles.historyRoute}
+                                numberOfLines={2}
+                              >
+                                {trip.routeText}
+                              </Text>
+                              {meta ? (
+                                <Text style={styles.historyMeta}>{meta}</Text>
+                              ) : null}
+                            </View>
+                          );
+                        })}
+                      </View>
+                    )}
                   </View>
 
                   {ob?.zelle ? (
@@ -516,31 +566,6 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
                       <Text style={styles.fieldValue}>{ob.zelle}</Text>
                     </View>
                   ) : null}
-
-                  {ob?.extraInfo ? (
-                    <View style={styles.fieldBlock}>
-                      <Text style={styles.fieldLabel}>Notes</Text>
-                      <Text style={styles.fieldValue}>{ob.extraInfo}</Text>
-                    </View>
-                  ) : null}
-
-                  <Pressable
-                    accessibilityRole="button"
-                    accessibilityLabel="Settings"
-                    onPress={openSettings}
-                    style={({ pressed }) => [
-                      styles.settingsRow,
-                      pressed && styles.settingsRowPressed,
-                    ]}
-                  >
-                    <View style={styles.settingsRowLeft}>
-                      <View style={styles.settingsIconWrap}>
-                        <Icon icon={Settings} size="md" color={colors.accent} />
-                      </View>
-                      <Text style={styles.settingsRowLabel}>Settings</Text>
-                    </View>
-                    <Icon icon={ChevronRight} size="sm" color={colors.faint} />
-                  </Pressable>
                 </View>
               ) : (
                 <View style={styles.fields}>
@@ -552,20 +577,24 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
                       variant="avatar"
                     />
                     <View style={styles.vehiclePhotos}>
-                      <PhotoPickerField
-                        label="Exterior"
-                        uri={exteriorUri}
-                        onChange={setExteriorUri}
-                        variant="rect"
-                        compact
-                      />
-                      <PhotoPickerField
-                        label="Interior"
-                        uri={interiorUri}
-                        onChange={setInteriorUri}
-                        variant="rect"
-                        compact
-                      />
+                      <View style={styles.vehiclePhotoCol}>
+                        <PhotoPickerField
+                          label="Exterior"
+                          uri={exteriorUri}
+                          onChange={setExteriorUri}
+                          variant="rect"
+                          compact
+                        />
+                      </View>
+                      <View style={styles.vehiclePhotoCol}>
+                        <PhotoPickerField
+                          label="Interior"
+                          uri={interiorUri}
+                          onChange={setInteriorUri}
+                          variant="rect"
+                          compact
+                        />
+                      </View>
                     </View>
                   </View>
 
@@ -583,9 +612,6 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
                       {user?.phone
                         ? formatPhoneDisplay(user.phone)
                         : '—'}
-                    </Text>
-                    <Text style={styles.fieldHint}>
-                      Account phone can’t be changed here.
                     </Text>
                   </View>
 
@@ -646,9 +672,6 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
                     <Text style={styles.statValue}>
                       {drivesLabel(completedCount)}
                     </Text>
-                    <Text style={styles.fieldHint}>
-                      Counts completed jobs automatically.
-                    </Text>
                   </View>
 
                   {formError ? (
@@ -678,10 +701,8 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
                 </>
               )}
             </View>
-          </ScrollView>
-        </KeyboardAvoidingView>
-      </Animated.View>
-    </Modal>
+      </ScrollView>
+    </KeyboardAvoidingView>
   );
 }
 
@@ -725,9 +746,6 @@ const styles = StyleSheet.create({
   root: {
     flex: 1,
   },
-  fill: {
-    ...StyleSheet.absoluteFillObject,
-  },
   flex: {
     flex: 1,
   },
@@ -770,6 +788,11 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.accent,
   },
+  topActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+  },
   topSpacer: {
     width: 40,
   },
@@ -802,42 +825,24 @@ const styles = StyleSheet.create({
   viewBlock: {
     gap: space.lg,
   },
-  settingsRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingVertical: space.md,
-    paddingHorizontal: space.md,
-    borderRadius: 16,
-    backgroundColor: colors.glass,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.glassBorder,
-  },
-  settingsRowPressed: {
-    opacity: 0.85,
-  },
-  settingsRowLeft: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.md,
-  },
-  settingsIconWrap: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.accentMuted,
-  },
-  settingsRowLabel: {
-    fontFamily: fonts.sansSemi,
-    fontSize: 16,
-    letterSpacing: -0.2,
-    color: colors.ink,
+  profileViewBlock: {
+    marginTop: space.lg,
   },
   settingsSection: {
     gap: space.md,
     marginTop: space.sm,
+  },
+  settingsSectionTitle: {
+    fontFamily: fonts.display,
+    fontSize: 28,
+    letterSpacing: -0.4,
+    lineHeight: 34,
+    color: colors.ink,
+  },
+  settingsDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.hairline,
+    marginVertical: space.md,
   },
   notifStack: {
     gap: space.lg,
@@ -864,6 +869,35 @@ const styles = StyleSheet.create({
   statRow: {
     gap: space.xs,
     paddingVertical: space.sm,
+  },
+  historyBlock: {
+    gap: space.sm,
+  },
+  historyList: {
+    gap: space.sm,
+  },
+  historyRow: {
+    gap: 4,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+    borderRadius: radius.lg,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassBorder,
+    backgroundColor: colors.field,
+  },
+  historyRoute: {
+    fontFamily: fonts.sansSemi,
+    fontSize: 16,
+    letterSpacing: -0.2,
+    color: colors.ink,
+  },
+  historyMeta: {
+    ...type.caption,
+    color: colors.muted,
+  },
+  historyEmpty: {
+    ...type.body,
+    color: colors.faint,
   },
   statLabel: {
     ...type.label,
@@ -903,6 +937,9 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     gap: space.md,
     width: '100%',
+  },
+  vehiclePhotoCol: {
+    flex: 1,
   },
   formError: {
     ...type.caption,

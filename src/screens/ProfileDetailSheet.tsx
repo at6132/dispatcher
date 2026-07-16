@@ -203,6 +203,7 @@ export function ProfileDetailSheet({
                   name={profile.name}
                   vehicleType={profile.onboarding?.vehicleType}
                   detail={profileDetail(profile)}
+                  notes={profile.onboarding?.extraInfo}
                   photoUri={profile.onboarding?.selfPhotoUri}
                   vehicleInteriorUri={profile.onboarding?.vehicleInteriorUri}
                   vehicleExteriorUri={profile.onboarding?.vehicleExteriorUri}
@@ -210,15 +211,6 @@ export function ProfileDetailSheet({
                   favorited={profile.favorited}
                   availability={profile.availability ?? 'offline'}
                 />
-
-                {profile.onboarding?.extraInfo ? (
-                  <View style={styles.noteBlock}>
-                    <Text style={styles.noteLabel}>Notes</Text>
-                    <Text style={styles.noteBody}>
-                      {profile.onboarding.extraInfo}
-                    </Text>
-                  </View>
-                ) : null}
 
                 <View style={styles.historyBlock}>
                   <Text style={styles.historyTitle}>Trip history</Text>
@@ -381,22 +373,6 @@ const styles = StyleSheet.create({
   },
   statusTagLabel: {
     ...type.label,
-    color: colors.inkSoft,
-  },
-  noteBlock: {
-    gap: space.xs,
-    padding: space.md,
-    borderRadius: radius.lg,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.glassBorder,
-    backgroundColor: colors.field,
-  },
-  noteLabel: {
-    ...type.label,
-    color: colors.muted,
-  },
-  noteBody: {
-    ...type.body,
     color: colors.inkSoft,
   },
   historyBlock: {

@@ -584,6 +584,7 @@ export function ManageDriveSheet({
                                   : undefined
                               }
                               detail={applicantDetail(app)}
+                              notes={app.driver.onboarding?.extraInfo}
                               photoUri={app.driver.onboarding?.selfPhotoUri}
                               vehicleInteriorUri={
                                 app.driver.onboarding?.vehicleInteriorUri
@@ -719,6 +720,7 @@ export function ManageDriveSheet({
                             favorited: isFavorited(statusDriver.id),
                           },
                         )}
+                        notes={statusDriver.onboarding?.extraInfo}
                         photoUri={statusDriver.onboarding?.selfPhotoUri}
                         vehicleInteriorUri={
                           statusDriver.onboarding?.vehicleInteriorUri

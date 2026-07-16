@@ -74,6 +74,9 @@ function toSendTarget(item: ProfileListItem): DirectSendTarget {
     vehicleInteriorUri: item.onboarding?.vehicleInteriorUri,
     vehicleExteriorUri: item.onboarding?.vehicleExteriorUri,
     detail: profileDetail(item),
+    ...(item.onboarding?.extraInfo?.trim()
+      ? { notes: item.onboarding.extraInfo.trim() }
+      : {}),
     ...(lat != null && Number.isFinite(lat) ? { lastLat: lat } : {}),
     ...(lng != null && Number.isFinite(lng) ? { lastLng: lng } : {}),
   };
@@ -359,6 +362,7 @@ function ProfileRow({
           name={item.name}
           vehicleType={item.onboarding?.vehicleType}
           detail={profileDetail(item)}
+          notes={item.onboarding?.extraInfo}
           photoUri={item.onboarding?.selfPhotoUri}
           vehicleInteriorUri={item.onboarding?.vehicleInteriorUri}
           vehicleExteriorUri={item.onboarding?.vehicleExteriorUri}

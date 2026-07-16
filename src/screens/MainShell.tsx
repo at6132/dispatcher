@@ -30,7 +30,6 @@ export function MainShell() {
     null,
   );
   const [boardRefresh, setBoardRefresh] = useState(0);
-  const [profileOpen, setProfileOpen] = useState(false);
 
   useEffect(() => {
     void syncPushRegistration();
@@ -61,19 +60,16 @@ export function MainShell() {
               <ProfilesScreen
                 onSendDirect={(target) => openCompose(null, target)}
               />
-            ) : (
+            ) : tab === 'bank' ? (
               <BankScreen />
+            ) : (
+              <ProfileScreen />
             )}
           </View>
           <BottomNav
             active={tab}
-            onChange={(next) => {
-              setProfileOpen(false);
-              setTab(next);
-            }}
+            onChange={setTab}
             onAddPress={(origin) => openCompose(origin)}
-            onProfilePress={() => setProfileOpen(true)}
-            profileActive={profileOpen}
           />
           <CreateDriveSheet
             visible={composeOpen}
@@ -91,10 +87,6 @@ export function MainShell() {
             drive={managingDrive}
             onClose={() => setManagingDrive(null)}
             onChanged={bumpBoard}
-          />
-          <ProfileScreen
-            visible={profileOpen}
-            onClose={() => setProfileOpen(false)}
           />
         </View>
       </ProfileViewerProvider>

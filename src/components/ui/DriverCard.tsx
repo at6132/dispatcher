@@ -21,6 +21,8 @@ export type DriverCardProps = {
   phone?: string;
   /** e.g. 7 seats · 3 yrs upstate */
   detail?: string;
+  /** Driver profile notes (extraInfo) */
+  notes?: string;
   /** Live / last-known position for the map */
   coordinate?: DriverCoordinate | null;
   /** Hide map (e.g. home screen) */
@@ -77,6 +79,7 @@ export function DriverCard({
   vehicleType,
   phone,
   detail,
+  notes,
   coordinate,
   showMap = true,
   highlighted = false,
@@ -89,6 +92,7 @@ export function DriverCard({
   const initial = (name.trim().charAt(0) || '?').toUpperCase();
   const hasVehiclePhotos = Boolean(vehicleInteriorUri || vehicleExteriorUri);
   const typeLabel = vehicleType?.trim();
+  const notesText = notes?.trim();
   const status = availability ?? 'offline';
 
   const heartBadge = favorited ? (
@@ -230,6 +234,14 @@ export function DriverCard({
             ) : null}
           </View>
         </View>
+
+        {notesText ? (
+          <View style={styles.notesBlock}>
+            <View style={styles.notesDivider} />
+            <Text style={styles.notesLabel}>Notes</Text>
+            <Text style={styles.notesBody}>{notesText}</Text>
+          </View>
+        ) : null}
 
         {hasVehiclePhotos ? (
           <View style={styles.vehicleRow}>
@@ -446,6 +458,25 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     color: colors.muted,
+  },
+  notesBlock: {
+    gap: space.xs,
+  },
+  notesDivider: {
+    height: StyleSheet.hairlineWidth,
+    backgroundColor: colors.hairline,
+    marginBottom: space.xs,
+  },
+  notesLabel: {
+    ...type.label,
+    color: colors.faint,
+    textTransform: 'uppercase',
+  },
+  notesBody: {
+    ...type.body,
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.inkSoft,
   },
   vehicleRow: {
     flexDirection: 'row',

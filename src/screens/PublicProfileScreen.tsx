@@ -268,6 +268,7 @@ export function PublicProfileScreen({
                 name={profile.name}
                 vehicleType={ob?.vehicleType}
                 detail={detailParts.join(' · ') || undefined}
+                notes={ob?.extraInfo}
                 showMap={false}
                 highlighted={isFavorite}
               />
@@ -278,13 +279,6 @@ export function PublicProfileScreen({
                   {drivesLabel(profile.completedDrivesCount ?? 0)}
                 </Text>
               </View>
-
-              {ob?.extraInfo ? (
-                <View style={styles.fieldBlock}>
-                  <Text style={styles.fieldLabel}>Notes</Text>
-                  <Text style={styles.fieldValue}>{ob.extraInfo}</Text>
-                </View>
-              ) : null}
 
               {favError ? (
                 <Text style={styles.favError} accessibilityRole="alert">
@@ -400,18 +394,6 @@ const styles = StyleSheet.create({
     fontSize: 18,
     letterSpacing: -0.2,
     color: colors.ink,
-  },
-  fieldBlock: {
-    gap: space.xs,
-  },
-  fieldLabel: {
-    ...type.label,
-    color: colors.faint,
-    textTransform: 'uppercase',
-  },
-  fieldValue: {
-    ...type.body,
-    color: colors.inkSoft,
   },
   centered: {
     paddingTop: space.xxxl,
