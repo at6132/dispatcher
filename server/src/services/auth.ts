@@ -38,6 +38,10 @@ export type AuthUserDto = {
     zelle?: string;
   };
   status: 'active' | 'locked';
+  availability: 'available' | 'busy' | 'offline';
+  lastLat?: number;
+  lastLng?: number;
+  locationUpdatedAt?: string;
 };
 
 async function resolvePhotoUri(
@@ -65,6 +69,10 @@ export type PublicProfileDto = {
   id: string;
   name: string;
   onboardingComplete: boolean;
+  availability: 'available' | 'busy' | 'offline';
+  lastLat?: number;
+  lastLng?: number;
+  locationUpdatedAt?: string;
   onboarding?: {
     vehicleClass: 'sedan' | 'suv' | 'large_suv' | 'minivan' | 'sprinter';
     vehicleType: string;
@@ -80,10 +88,19 @@ export type PublicProfileDto = {
 /** Safe for other drivers — no phone, zelle, or lock status. */
 export async function toPublicProfile(userId: string): Promise<PublicProfileDto> {
   const full = await toAuthUser(userId);
+  // Location only when online (available / busy) — used for direct-send maps.
+  const shareLocation =
+    full.availability === 'available' || full.availability === 'busy';
   return {
     id: full.id,
     name: full.name,
     onboardingComplete: full.onboardingComplete,
+    availability: full.availability,
+    ...(shareLocation && full.lastLat != null ? { lastLat: full.lastLat } : {}),
+    ...(shareLocation && full.lastLng != null ? { lastLng: full.lastLng } : {}),
+    ...(shareLocation && full.locationUpdatedAt
+      ? { locationUpdatedAt: full.locationUpdatedAt }
+      : {}),
     ...(full.onboarding
       ? {
           onboarding: {
@@ -125,6 +142,7 @@ export async function toAuthUser(userId: string): Promise<AuthUserDto> {
     name: user.name,
     onboardingComplete: user.onboardingComplete,
     status: user.status,
+    availability: profile?.availability ?? 'offline',
   };
 
   if (profile) {
@@ -145,6 +163,17 @@ export async function toAuthUser(userId: string): Promise<AuthUserDto> {
       ...(vehicleInteriorUri ? { vehicleInteriorUri } : {}),
       ...(vehicleExteriorUri ? { vehicleExteriorUri } : {}),
     };
+    if (profile.lastLat != null && profile.lastLng != null) {
+      const lat = Number(profile.lastLat);
+      const lng = Number(profile.lastLng);
+      if (Number.isFinite(lat) && Number.isFinite(lng)) {
+        dto.lastLat = lat;
+        dto.lastLng = lng;
+      }
+    }
+    if (profile.locationUpdatedAt) {
+      dto.locationUpdatedAt = profile.locationUpdatedAt.toISOString();
+    }
   }
 
   return dto;

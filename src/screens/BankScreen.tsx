@@ -177,7 +177,16 @@ export function BankScreen() {
                             ? 'You owe'
                             : 'Balance'}
                       </Text>
-                      <Text style={styles.rowAmount}>
+                      <Text
+                        style={[
+                          styles.rowAmount,
+                          isPoster
+                            ? styles.amountIncoming
+                            : isDriver
+                              ? styles.amountOutgoing
+                              : null,
+                        ]}
+                      >
                         {formatUsd(b.amountCents)}
                       </Text>
                     </View>
@@ -281,14 +290,14 @@ const styles = StyleSheet.create({
     fontSize: 36,
     letterSpacing: -1,
     lineHeight: 42,
-    color: colors.ink,
+    color: colors.success,
   },
   balanceAmountSecondary: {
     fontFamily: fonts.display,
     fontSize: 36,
     letterSpacing: -1,
     lineHeight: 42,
-    color: colors.muted,
+    color: colors.danger,
   },
   stateBlock: {
     gap: space.md,
@@ -337,6 +346,12 @@ const styles = StyleSheet.create({
     fontSize: 28,
     letterSpacing: -0.5,
     color: colors.ink,
+  },
+  amountIncoming: {
+    color: colors.success,
+  },
+  amountOutgoing: {
+    color: colors.danger,
   },
   rowDue: {
     ...type.caption,

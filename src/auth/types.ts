@@ -38,6 +38,10 @@ export type AuthUser = {
   name: string;
   onboardingComplete: boolean;
   onboarding?: OnboardingProfile;
+  availability?: 'available' | 'busy' | 'offline';
+  lastLat?: number;
+  lastLng?: number;
+  locationUpdatedAt?: string;
 };
 
 export type SignInInput = {

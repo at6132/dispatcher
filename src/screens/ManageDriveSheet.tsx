@@ -24,6 +24,11 @@ import {
 } from '../api/drives';
 import { mapApiError } from '../api/errors';
 import {
+  favoriteProfile,
+  unfavoriteProfile,
+} from '../api/profiles';
+import { useAuth } from '../auth/AuthContext';
+import {
   VEHICLE_CLASS_OPTIONS,
   type VehicleClass,
 } from '../auth/types';
@@ -39,7 +44,13 @@ import { Icon } from '../components/ui/Icon';
 import { LoadingHint } from '../components/ui/LoadingHint';
 import { NumberStepper } from '../components/ui/NumberStepper';
 import { TextField } from '../components/ui/TextField';
-import { MistBackdrop, colors, fonts, radius, space, type } from '../theme';
+import {
+  getLocalFavoriteIds,
+  rememberProfiles,
+  setLocalFavorite,
+} from '../profiles/favoriteStore';
+import { useProfileViewer } from '../profiles/ProfileViewerContext';
+import { MistBackdrop, colors, fonts, radius, space, tripRouteColor, type } from '../theme';
 
 type ManageTab = 'applicants' | 'status' | 'details';
 
@@ -58,12 +69,17 @@ const TRIP_OPTIONS: { value: TripChoice; label: string }[] = [
 ];
 
 function applicantDetail(app: DriveApplication): string | undefined {
-  const years = app.driver.onboarding?.yearsDrivingUpstate;
-  const seats = app.driver.onboarding?.seats;
-  const parts = [
-    seats != null ? `${seats} seats` : null,
-    years != null ? `${years} yrs upstate` : null,
-  ].filter(Boolean);
+  const o = app.driver.onboarding;
+  const parts: string[] = [];
+  if (app.favorited) parts.push('Favorite');
+  if (o) {
+    if (o.seats != null) parts.push(`${o.seats} seats`);
+    if (o.yearsDrivingUpstate != null) {
+      parts.push(
+        `${o.yearsDrivingUpstate} yr${o.yearsDrivingUpstate === 1 ? '' : 's'} upstate`,
+      );
+    }
+  }
   return parts.length ? parts.join(' · ') : undefined;
 }
 
@@ -96,6 +112,8 @@ export function ManageDriveSheet({
   onChanged,
 }: ManageDriveSheetProps) {
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
+  const { openProfile, profileOpen } = useProfileViewer();
   const [mounted, setMounted] = useState(false);
   /** Snapshot so close animation still has drive data. */
   const [active, setActive] = useState<DriveListItem | null>(null);
@@ -108,6 +126,8 @@ export function ManageDriveSheet({
   const [acceptingId, setAcceptingId] = useState<string | null>(null);
   const [clearing, setClearing] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [favoritingId, setFavoritingId] = useState<string | null>(null);
+  const [localFavIds, setLocalFavIds] = useState<Set<string>>(new Set());
 
   const [title, setTitle] = useState('');
   const [phone, setPhone] = useState('');
@@ -138,13 +158,31 @@ export function ManageDriveSheet({
     setAppsError(null);
     try {
       const items = await listApplications(driveId);
-      setApps(items.filter((a) => a.status !== 'cleared'));
+      let favs = new Set<string>();
+      if (user?.id) {
+        favs = await getLocalFavoriteIds(user.id);
+        setLocalFavIds(favs);
+      }
+      setApps(
+        items
+          .filter((a) => a.status !== 'cleared')
+          .map((a) => ({
+            ...a,
+            favorited: Boolean(a.favorited) || favs.has(a.driver.id),
+          })),
+      );
+      await rememberProfiles(
+        items.map((a) => ({
+          ...a.driver,
+          favorited: Boolean(a.favorited) || favs.has(a.driver.id),
+        })),
+      );
     } catch (err) {
       setAppsError(mapApiError(err).message);
     } finally {
       setAppsLoading(false);
     }
-  }, []);
+  }, [user?.id]);
 
   useEffect(() => {
     if (visible && drive) {
@@ -176,6 +214,63 @@ export function ManageDriveSheet({
       }
     }
   }, [visible, drive, tab]);
+
+  const openApplicantProfile = (
+    driver: DriveApplication['driver'],
+  ) => {
+    // Never stack Modals — nested Modal + MapView freezes the app.
+    onClose();
+    setTimeout(() => {
+      openProfile(driver.id, driver);
+    }, 350);
+  };
+
+  const isFavorited = (driverId: string, appFavorited?: boolean) =>
+    Boolean(appFavorited) || localFavIds.has(driverId);
+
+  const onToggleFavorite = async (
+    driver: DriveApplication['driver'],
+    currentlyFavorited: boolean,
+  ) => {
+    if (!user?.id) return;
+    setFavoritingId(driver.id);
+    setActionError(null);
+    const next = !currentlyFavorited;
+    setLocalFavIds((prev) => {
+      const copy = new Set(prev);
+      if (next) copy.add(driver.id);
+      else copy.delete(driver.id);
+      return copy;
+    });
+    setApps((prev) =>
+      prev.map((a) =>
+        a.driver.id === driver.id ? { ...a, favorited: next } : a,
+      ),
+    );
+    try {
+      await setLocalFavorite(user.id, driver.id, next);
+      await rememberProfiles([{ ...driver, favorited: next }]);
+      if (next) await favoriteProfile(driver.id);
+      else await unfavoriteProfile(driver.id);
+    } catch (err) {
+      setLocalFavIds((prev) => {
+        const copy = new Set(prev);
+        if (currentlyFavorited) copy.add(driver.id);
+        else copy.delete(driver.id);
+        return copy;
+      });
+      setApps((prev) =>
+        prev.map((a) =>
+          a.driver.id === driver.id
+            ? { ...a, favorited: currentlyFavorited }
+            : a,
+        ),
+      );
+      setActionError(mapApiError(err).message);
+    } finally {
+      setFavoritingId(null);
+    }
+  };
 
   const requestClose = () => {
     if (saving || acceptingId || clearing) return;
@@ -353,7 +448,13 @@ export function ManageDriveSheet({
                   <Text style={styles.lead}>Manage </Text>
                   <Text style={styles.trail}>drive</Text>
                 </View>
-                <Text style={styles.route} numberOfLines={2}>
+                <Text
+                  style={[
+                    styles.route,
+                    { color: tripRouteColor(sheetDrive.status) },
+                  ]}
+                  numberOfLines={2}
+                >
                   {sheetDrive.routeText}
                 </Text>
 
@@ -457,7 +558,22 @@ export function ManageDriveSheet({
                                 app.driver.onboarding?.vehicleExteriorUri
                               }
                               coordinate={coord}
-                              showMap={Boolean(coord)}
+                              showMap={!profileOpen && Boolean(coord)}
+                              availability={
+                                app.driver.availability ?? 'offline'
+                              }
+                              favorited={isFavorited(
+                                app.driver.id,
+                                app.favorited,
+                              )}
+                              favoriting={favoritingId === app.driver.id}
+                              onToggleFavorite={() =>
+                                void onToggleFavorite(
+                                  app.driver,
+                                  isFavorited(app.driver.id, app.favorited),
+                                )
+                              }
+                              onPress={() => openApplicantProfile(app.driver)}
                             />
                             <Button
                               loading={accepting}
@@ -535,6 +651,7 @@ export function ManageDriveSheet({
                             status: 'accepted',
                             createdAt: '',
                             driver: statusDriver,
+                            favorited: isFavorited(statusDriver.id),
                           },
                         )}
                         photoUri={statusDriver.onboarding?.selfPhotoUri}
@@ -545,7 +662,28 @@ export function ManageDriveSheet({
                           statusDriver.onboarding?.vehicleExteriorUri
                         }
                         coordinate={statusCoord}
-                        showMap
+                        showMap={!profileOpen && Boolean(statusCoord)}
+                        availability={statusDriver.availability ?? 'offline'}
+                        favorited={isFavorited(
+                          statusDriver.id,
+                          acceptedApp?.favorited,
+                        )}
+                        favoriting={favoritingId === statusDriver.id}
+                        onToggleFavorite={() =>
+                          void onToggleFavorite(
+                            {
+                              ...statusDriver,
+                              ...(acceptedApp?.driver.phone
+                                ? { phone: acceptedApp.driver.phone }
+                                : {}),
+                            },
+                            isFavorited(
+                              statusDriver.id,
+                              acceptedApp?.favorited,
+                            ),
+                          )
+                        }
+                        onPress={() => openApplicantProfile(statusDriver)}
                       />
                     </View>
                   ) : (
@@ -738,7 +876,7 @@ const styles = StyleSheet.create({
   },
   route: {
     ...type.body,
-    color: colors.muted,
+    color: colors.ink,
     paddingLeft: space.xs,
     marginTop: -space.sm,
   },

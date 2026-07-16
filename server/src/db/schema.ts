@@ -40,6 +40,11 @@ export const photoKindEnum = pgEnum('photo_kind', [
   'interior',
   'exterior',
 ]);
+export const driverAvailabilityEnum = pgEnum('driver_availability', [
+  'available',
+  'busy',
+  'offline',
+]);
 
 export const users = pgTable(
   'users',
@@ -73,6 +78,12 @@ export const driverProfiles = pgTable('driver_profiles', {
   selfPhotoKey: text('self_photo_key'),
   vehicleInteriorKey: text('vehicle_interior_key'),
   vehicleExteriorKey: text('vehicle_exterior_key'),
+  availability: driverAvailabilityEnum('availability')
+    .notNull()
+    .default('offline'),
+  lastLat: numeric('last_lat', { precision: 10, scale: 7 }),
+  lastLng: numeric('last_lng', { precision: 10, scale: 7 }),
+  locationUpdatedAt: timestamp('location_updated_at', { withTimezone: true }),
   updatedAt: timestamp('updated_at', { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -120,6 +131,10 @@ export const drives = pgTable(
     assigneeId: uuid('assignee_id').references(() => users.id, {
       onDelete: 'set null',
     }),
+    /** When set, this drive was sent directly to that driver (not open board). */
+    invitedDriverId: uuid('invited_driver_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
     costCents: integer('cost_cents'),
     miles: numeric('miles', { precision: 8, scale: 2 }),
     waitMinutes: integer('wait_minutes'),
@@ -137,6 +152,28 @@ export const drives = pgTable(
     index('drives_status_created_idx').on(t.status, t.createdAt),
     index('drives_poster_idx').on(t.posterId),
     index('drives_assignee_idx').on(t.assigneeId),
+    index('drives_invited_driver_idx').on(t.invitedDriverId),
+  ],
+);
+
+/** Private trust list — poster favorites for quick send + applicant signal. */
+export const favorites = pgTable(
+  'favorites',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    userId: uuid('user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    favoriteUserId: uuid('favorite_user_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('favorites_user_favorite_uidx').on(t.userId, t.favoriteUserId),
+    index('favorites_user_idx').on(t.userId),
   ],
 );
 

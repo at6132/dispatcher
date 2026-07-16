@@ -13,7 +13,7 @@ import {
 
 import { completeDrive, type DriveListItem } from '../../api/drives';
 import { mapApiError } from '../../api/errors';
-import { colors, fonts, motion, radius, space, type } from '../../theme';
+import { colors, fonts, motion, radius, space, tripRouteColor, type } from '../../theme';
 import { Button } from './Button';
 import { TextField } from './TextField';
 
@@ -180,7 +180,17 @@ export function CompleteDriveModal({
             >
               <Animated.View style={{ opacity: formOpacity }}>
                 <Text style={styles.eyebrow}>Complete drive</Text>
-                <Text style={styles.title} numberOfLines={2}>
+                <Text
+                  style={[
+                    styles.title,
+                    {
+                      color: drive
+                        ? tripRouteColor(drive.status)
+                        : colors.ink,
+                    },
+                  ]}
+                  numberOfLines={2}
+                >
                   {drive?.routeText ?? 'Drive'}
                 </Text>
                 <Text style={styles.support}>

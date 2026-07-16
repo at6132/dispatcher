@@ -10,6 +10,7 @@ export {
   radius,
   space,
   theme,
+  tripRouteColor,
   type,
   type Theme,
 } from './tokens';

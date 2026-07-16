@@ -18,21 +18,25 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import {
   applyToDrive,
+  listDirectOffers,
   listDrives,
   markDrivePickedUp,
   type Drive,
   type DriveBoard,
   type DriveListItem,
 } from '../api/drives';
-import { mapApiError } from '../api/errors';
+import { isApiError, mapApiError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
+import { logger } from '../debug/logger';
 import { bottomNavClearance } from '../components/navigation/BottomNav';
 import { Button } from '../components/ui/Button';
 import { CompleteDriveModal } from '../components/ui/CompleteDriveModal';
 import { DriveCard } from '../components/ui/DriveCard';
 import { getCachedCoordinate } from '../components/ui/getCachedCoordinate';
+import { IncomingJobModal } from '../components/ui/IncomingJobModal';
 import { LoadingHint } from '../components/ui/LoadingHint';
 import { driverMatchesOpenDrive } from '../drives/matchDrive';
+import { useProfileViewer } from '../profiles/ProfileViewerContext';
 import { GlassSurface, colors, fonts, radius, space, type } from '../theme';
 
 const BOARDS: {
@@ -92,6 +96,19 @@ function splitActiveSections(
   ];
 }
 
+/** Oldest completed = Trip 0. Uses loaded history only (board limit 50). */
+function historyTripNumbers(items: DriveListItem[]): Map<string, number> {
+  const sorted = [...items].sort((a, b) => {
+    const ta = new Date(a.completedAt ?? a.updatedAt ?? a.createdAt).getTime();
+    const tb = new Date(b.completedAt ?? b.updatedAt ?? b.createdAt).getTime();
+    if (ta !== tb) return ta - tb;
+    return a.id.localeCompare(b.id);
+  });
+  const map = new Map<string, number>();
+  sorted.forEach((d, i) => map.set(d.id, i));
+  return map;
+}
+
 type HomeScreenProps = {
   /** Bump to refetch boards after an external mutation. */
   refreshToken?: number;
@@ -105,6 +122,7 @@ export function HomeScreen({
 }: HomeScreenProps) {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
+  const { openProfile } = useProfileViewer();
   const pagerRef = useRef<Animated.ScrollView>(null);
   const { width: pageWidth } = useWindowDimensions();
   const scrollX = useRef(new Animated.Value(0)).current;
@@ -124,6 +142,32 @@ export function HomeScreen({
   );
   const [pickingUpId, setPickingUpId] = useState<string | null>(null);
   const [pickupError, setPickupError] = useState<string | null>(null);
+  const [incomingOffer, setIncomingOffer] = useState<DriveListItem | null>(
+    null,
+  );
+  /** Stop 8s offer polling after auth death so we don't spam 401s. */
+  const offersPollStoppedRef = useRef(false);
+
+  const pollOffers = useCallback(async () => {
+    if (!user?.id || offersPollStoppedRef.current) return;
+    try {
+      const offers = await listDirectOffers({
+        viewerId: user.id,
+        limit: 10,
+      });
+      setIncomingOffer((current) => {
+        if (current && offers.some((o) => o.id === current.id)) return current;
+        return offers[0] ?? null;
+      });
+    } catch (err) {
+      if (isApiError(err) && err.status === 401) {
+        offersPollStoppedRef.current = true;
+        logger.warn('home', 'offers_poll_stopped_unauthorized');
+        return;
+      }
+      // Older APIs / offline — no offer popup
+    }
+  }, [user?.id]);
 
   const loadBoard = useCallback(
     async (board: DriveBoard, mode: 'initial' | 'refresh' = 'initial') => {
@@ -197,6 +241,19 @@ export function HomeScreen({
   }, [index, loadBoard, refreshToken]);
 
   useEffect(() => {
+    offersPollStoppedRef.current = false;
+    void pollOffers();
+    const id = setInterval(() => {
+      if (offersPollStoppedRef.current) {
+        clearInterval(id);
+        return;
+      }
+      void pollOffers();
+    }, 8_000);
+    return () => clearInterval(id);
+  }, [pollOffers, refreshToken]);
+
+  useEffect(() => {
     const timers = BOARDS.map((b, i) =>
       i === index
         ? null
@@ -244,6 +301,8 @@ export function HomeScreen({
   const thumbStops = BOARDS.map((_, i) => i * segmentWidth);
 
   // Mid-swipe warp: stretch at halfway points, settle on each page.
+  // scaleX uses the view center as origin — do not left-compensate translateX
+  // or the thumb drifts under the middle (Active) label.
   const warpInput = pageStops.flatMap((p, i) =>
     i < BOARD_COUNT - 1 ? [p, p + pageWidth * 0.5] : [p],
   );
@@ -262,15 +321,6 @@ export function HomeScreen({
     outputRange: warpScale.length ? warpScale : [1, 1],
     extrapolate: 'clamp',
   });
-
-  // Keep stretch visually centered on the moving segment as scale grows.
-  const thumbX =
-    segmentWidth > 0
-      ? Animated.subtract(
-          thumbTranslate,
-          Animated.multiply(Animated.subtract(thumbScaleX, 1), segmentWidth / 2),
-        )
-      : thumbTranslate;
 
   const onApply = async (driveId: string) => {
     setApplyError(null);
@@ -361,6 +411,11 @@ export function HomeScreen({
     [boards.active.items, user?.id],
   );
 
+  const historyTripById = useMemo(
+    () => historyTripNumbers(boards.history.items),
+    [boards.history.items],
+  );
+
   const renderDriveCard = (
     item: DriveListItem,
     board: DriveBoard,
@@ -377,6 +432,7 @@ export function HomeScreen({
     return (
       <DriveCard
         drive={item}
+        board={board}
         viewerId={user?.id}
         onApply={canApply ? () => void onApply(item.id) : undefined}
         onManage={
@@ -399,6 +455,10 @@ export function HomeScreen({
         pickingUp={pickingUpId === item.id}
         applyAgain={applyAgain}
         showMap={opts?.showMap}
+        onOpenProfile={openProfile}
+        tripNumber={
+          board === 'history' ? historyTripById.get(item.id) : undefined
+        }
       />
     );
   };
@@ -449,7 +509,7 @@ export function HomeScreen({
                   {
                     width: segmentWidth,
                     transform: [
-                      { translateX: thumbX },
+                      { translateX: thumbTranslate },
                       { scaleX: thumbScaleX },
                     ],
                   },
@@ -464,7 +524,12 @@ export function HomeScreen({
                   accessibilityRole="tab"
                   accessibilityState={{ selected }}
                   onPress={() => goTo(i)}
-                  style={styles.segment}
+                  style={[
+                    styles.segment,
+                    segmentWidth > 0
+                      ? { width: segmentWidth }
+                      : styles.segmentFlex,
+                  ]}
                 >
                   <Text
                     style={[
@@ -590,6 +655,20 @@ export function HomeScreen({
         onClose={() => setCompletingDrive(null)}
         onCompleted={onDriveCompleted}
       />
+      <IncomingJobModal
+        visible={incomingOffer != null}
+        drive={incomingOffer}
+        onClose={() => setIncomingOffer(null)}
+        onAccepted={() => {
+          setIncomingOffer(null);
+          void loadBoard('active', 'refresh');
+          void pollOffers();
+        }}
+        onDeclined={() => {
+          setIncomingOffer(null);
+          void pollOffers();
+        }}
+      />
     </View>
   );
 }
@@ -624,22 +703,25 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accentSoft,
   },
   segment: {
-    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: space.sm + 2,
     borderRadius: radius.lg,
     zIndex: 1,
   },
+  segmentFlex: {
+    flex: 1,
+  },
   segmentLabel: {
     fontFamily: fonts.sansMedium,
     fontSize: 14,
     letterSpacing: 0.2,
     color: colors.faint,
+    textAlign: 'center',
+    alignSelf: 'stretch',
   },
   segmentLabelOn: {
     color: colors.ink,
-    fontFamily: fonts.sansSemi,
   },
   pager: {
     flex: 1,
@@ -688,6 +770,7 @@ const styles = StyleSheet.create({
   empty: {
     flexGrow: 1,
     justifyContent: 'center',
+    alignItems: 'center',
     gap: space.sm,
     paddingTop: space.xxxl,
     paddingHorizontal: space.xs,
@@ -695,11 +778,13 @@ const styles = StyleSheet.create({
   emptyTitle: {
     ...type.title,
     color: colors.ink,
+    textAlign: 'center',
   },
   emptyBody: {
     ...type.body,
     color: colors.muted,
     maxWidth: 280,
+    textAlign: 'center',
   },
   applyError: {
     ...type.caption,

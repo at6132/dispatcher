@@ -9,6 +9,7 @@ import {
   type ReactNode,
 } from 'react';
 
+import { clearTokens } from '../api/tokenStore';
 import { isApiError } from '../api/errors';
 import { logger } from '../debug/logger';
 import {
@@ -17,6 +18,7 @@ import {
   createAccount,
   getSessionUser,
   saveOnboarding,
+  savePresence,
 } from './sessionStore';
 import type {
   AuthStatus,
@@ -41,16 +43,17 @@ type AuthContextValue = {
   signIn: (input: SignInInput) => Promise<void>;
   signUp: (input: SignUpInput) => Promise<void>;
   completeOnboarding: (input: OnboardingInput) => Promise<void>;
+  updatePresence: (input: {
+    availability?: 'available' | 'busy' | 'offline';
+    lat?: number;
+    lng?: number;
+  }) => Promise<void>;
   signOut: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function mergeSession(
-  cached: AuthUser | null,
-  remote: AuthUser | null,
-): AuthUser | null {
-  if (!remote) return cached;
+function mergeSession(cached: AuthUser | null, remote: AuthUser): AuthUser {
   if (!cached || cached.id !== remote.id) return remote;
   // Never regress a locally sealed completion if the network read is stale.
   if (cached.onboardingComplete && !remote.onboardingComplete) {
@@ -119,20 +122,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const sessionUser = await getSessionUser();
         if (!stillCurrent()) return;
 
-        // Prefer in-memory user (may already be optimistically sealed mid-bootstrap).
-        const local = userRef.current ?? cached;
-        const merged = mergeSession(local, sessionUser);
-        if (!merged) {
+        // Null = no valid remote session (401). Do not keep a zombie cached user.
+        if (!sessionUser) {
+          await clearTokens();
+          await clearPersistedUser();
+          if (!stillCurrent()) return;
           setUser(null);
           userRef.current = null;
           setStatus('unauthenticated');
-          await clearPersistedUser();
           logger.info('auth', 'provider.ready', {
             status: 'unauthenticated',
+            reason: 'no_remote_session',
             onboardingComplete: null,
           });
           return;
         }
+
+        // Prefer in-memory user (may already be optimistically sealed mid-bootstrap).
+        const local = userRef.current ?? cached;
+        const merged = mergeSession(local, sessionUser);
 
         // Retry anytime the server still says incomplete and we have a draft —
         // even if local merge sealed the gate (optimistic / stale cache).
@@ -308,6 +316,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     [applyUser],
   );
 
+  const updatePresence = useCallback(
+    async (input: {
+      availability?: 'available' | 'busy' | 'offline';
+      lat?: number;
+      lng?: number;
+    }) => {
+      const current = userRef.current;
+      if (current && input.availability) {
+        // Optimistic chip flip before network
+        await applyUser({ ...current, availability: input.availability }, true);
+      }
+      const next = await savePresence(input);
+      await applyUser(next, true);
+    },
+    [applyUser],
+  );
+
   const signOut = useCallback(async () => {
     sessionGen.current += 1;
     await clearSession();
@@ -326,9 +351,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       signIn,
       signUp,
       completeOnboarding,
+      updatePresence,
       signOut,
     }),
-    [status, user, signIn, signUp, completeOnboarding, signOut],
+    [status, user, signIn, signUp, completeOnboarding, updatePresence, signOut],
   );
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

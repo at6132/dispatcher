@@ -28,9 +28,12 @@ import {
   normalizePhone,
   validatePhone,
 } from '../auth/validation';
+import type { DirectSendTarget } from '../api/profiles';
+import { getProfile } from '../api/profiles';
 import type { AddOrigin } from '../components/navigation/BottomNav';
 import { Button } from '../components/ui/Button';
 import { ChoiceGroup } from '../components/ui/ChoiceGroup';
+import { DriverCard } from '../components/ui/DriverCard';
 import { Icon } from '../components/ui/Icon';
 import { LoadingHint } from '../components/ui/LoadingHint';
 import { NumberStepper } from '../components/ui/NumberStepper';
@@ -40,6 +43,8 @@ import { MistBackdrop, colors, fonts, space, type } from '../theme';
 type CreateDriveSheetProps = {
   visible: boolean;
   origin: AddOrigin | null;
+  /** When set, offers the drive directly — they accept or decline. */
+  directTo?: DirectSendTarget | null;
   onClose: () => void;
   onCreated: () => void;
 };
@@ -51,9 +56,58 @@ const TRIP_OPTIONS: { value: TripChoice; label: string }[] = [
   { value: 'round_trip', label: 'Round trip' },
 ];
 
+function isOnline(status: DirectSendTarget['availability']) {
+  return status === 'available' || status === 'busy';
+}
+
+function mapCoordinate(target: DirectSendTarget | null) {
+  if (!target || !isOnline(target.availability)) return null;
+  const lat = Number(target.lastLat);
+  const lng = Number(target.lastLng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { latitude: lat, longitude: lng };
+}
+
+function toSendTargetFromProfile(
+  item: Awaited<ReturnType<typeof getProfile>>,
+  fallback: DirectSendTarget,
+): DirectSendTarget {
+  const o = item.onboarding;
+  const detailParts: string[] = [];
+  if (o?.seats != null) detailParts.push(`${o.seats} seats`);
+  if (o?.yearsDrivingUpstate != null) {
+    detailParts.push(
+      `${o.yearsDrivingUpstate} yr${o.yearsDrivingUpstate === 1 ? '' : 's'} upstate`,
+    );
+  }
+  return {
+    id: item.id,
+    name: item.name || fallback.name,
+    availability: item.availability ?? fallback.availability ?? 'offline',
+    vehicleType: o?.vehicleType ?? fallback.vehicleType,
+    photoUri: o?.selfPhotoUri ?? fallback.photoUri,
+    vehicleInteriorUri: o?.vehicleInteriorUri ?? fallback.vehicleInteriorUri,
+    vehicleExteriorUri: o?.vehicleExteriorUri ?? fallback.vehicleExteriorUri,
+    detail: detailParts.length
+      ? detailParts.join(' · ')
+      : fallback.detail,
+    ...(item.lastLat != null
+      ? { lastLat: Number(item.lastLat) }
+      : fallback.lastLat != null
+        ? { lastLat: Number(fallback.lastLat) }
+        : {}),
+    ...(item.lastLng != null
+      ? { lastLng: Number(item.lastLng) }
+      : fallback.lastLng != null
+        ? { lastLng: Number(fallback.lastLng) }
+        : {}),
+  };
+}
+
 export function CreateDriveSheet({
   visible,
   origin,
+  directTo = null,
   onClose,
   onCreated,
 }: CreateDriveSheetProps) {
@@ -76,6 +130,8 @@ export function CreateDriveSheet({
   const [submitted, setSubmitted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [formError, setFormError] = useState<string | null>(null);
+  const [liveTarget, setLiveTarget] = useState<DirectSendTarget | null>(null);
+  const [mapReady, setMapReady] = useState(false);
 
   const originRef = useRef(origin);
   if (visible && origin) originRef.current = origin;
@@ -118,6 +174,7 @@ export function CreateDriveSheet({
     }
 
     if (!mounted) return;
+    setMapReady(false);
     Animated.timing(progress, {
       toValue: 0,
       duration: 280,
@@ -126,11 +183,41 @@ export function CreateDriveSheet({
     }).start(({ finished }) => {
       if (finished) {
         setMounted(false);
+        setLiveTarget(null);
         resetForm();
       }
     });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- visibility-driven
   }, [visible]);
+
+  // Fresh location for direct-send — list/seed rows can be stale or missing coords.
+  useEffect(() => {
+    if (!visible || !directTo?.id) {
+      setLiveTarget(null);
+      setMapReady(false);
+      return;
+    }
+    const seed = directTo;
+    setLiveTarget(seed);
+    let cancelled = false;
+    const mapTimer = setTimeout(() => {
+      if (!cancelled) setMapReady(true);
+    }, 480);
+    void (async () => {
+      try {
+        const fresh = await getProfile(seed.id);
+        if (cancelled) return;
+        setLiveTarget(toSendTargetFromProfile(fresh, seed));
+      } catch {
+        // Keep the seed target if refresh fails
+      }
+    })();
+    return () => {
+      cancelled = true;
+      clearTimeout(mapTimer);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- refresh when sheet opens for a target
+  }, [visible, directTo?.id]);
 
   const titleError =
     submitted && title.trim().length < 2
@@ -173,6 +260,7 @@ export function CreateDriveSheet({
         tripType,
         ...(address.trim() ? { address: address.trim() } : {}),
         ...(extraInfo.trim() ? { extraInfo: extraInfo.trim() } : {}),
+        ...(directTo ? { inviteDriverId: directTo.id } : {}),
       });
       onCreated();
       onClose();
@@ -284,12 +372,58 @@ export function CreateDriveSheet({
             >
               <Pressable onPress={Keyboard.dismiss} accessible={false}>
                 <View style={styles.hero}>
-                  <Text style={styles.lead}>Add </Text>
-                  <Text style={styles.trail}>drive</Text>
+                  <Text style={styles.lead}>
+                    {directTo ? 'Send ' : 'Add '}
+                  </Text>
+                  <Text style={styles.trail}>
+                    {directTo ? 'directly' : 'drive'}
+                  </Text>
                 </View>
                 <Text style={styles.support}>
-                  Post to the open board for drivers nearby.
+                  {directTo
+                    ? `To ${directTo.name}. They get a popup with full details — accept or decline.`
+                    : 'Post to the open board for drivers nearby.'}
                 </Text>
+
+                {directTo ? (
+                  <View style={styles.directPreview}>
+                    <DriverCard
+                      name={(liveTarget ?? directTo).name}
+                      vehicleType={(liveTarget ?? directTo).vehicleType}
+                      detail={[
+                        (liveTarget ?? directTo).availability
+                          ? (liveTarget ?? directTo).availability ===
+                            'available'
+                            ? 'Available'
+                            : (liveTarget ?? directTo).availability === 'busy'
+                              ? 'Busy'
+                              : 'Offline'
+                          : null,
+                        (liveTarget ?? directTo).detail,
+                      ]
+                        .filter(Boolean)
+                        .join(' · ')}
+                      photoUri={(liveTarget ?? directTo).photoUri}
+                      vehicleInteriorUri={
+                        (liveTarget ?? directTo).vehicleInteriorUri
+                      }
+                      vehicleExteriorUri={
+                        (liveTarget ?? directTo).vehicleExteriorUri
+                      }
+                      coordinate={
+                        mapReady
+                          ? mapCoordinate(liveTarget ?? directTo)
+                          : null
+                      }
+                      showMap={isOnline(
+                        (liveTarget ?? directTo).availability,
+                      )}
+                      availability={
+                        (liveTarget ?? directTo).availability ?? 'offline'
+                      }
+                    />
+                  </View>
+                ) : null}
 
                 <View style={styles.fields}>
                   <TextField
@@ -365,9 +499,13 @@ export function CreateDriveSheet({
                   disabled={submitting}
                   onPress={() => void onSubmit()}
                 >
-                  Post drive
+                  {directTo ? `Send to ${directTo.name}` : 'Post drive'}
                 </Button>
-                {submitting ? <LoadingHint label="Posting…" /> : null}
+                {submitting ? (
+                  <LoadingHint
+                    label={directTo ? 'Sending…' : 'Posting…'}
+                  />
+                ) : null}
               </View>
             </ScrollView>
           </KeyboardAvoidingView>
@@ -443,6 +581,9 @@ const styles = StyleSheet.create({
     color: colors.muted,
     paddingLeft: space.xs,
     marginTop: -space.sm,
+  },
+  directPreview: {
+    marginTop: space.md,
   },
   fields: {
     gap: space.lg,

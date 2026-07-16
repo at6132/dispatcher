@@ -43,6 +43,20 @@
       "when": 1784310000000,
       "tag": "0005_admin_analytics",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1784500000000,
+      "tag": "0006_favorites_and_direct",
+      "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1784600000000,
+      "tag": "0007_availability_location",
+      "breakpoints": true
     }
   ]
 }

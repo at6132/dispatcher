@@ -2,24 +2,28 @@ import { useState } from 'react';
 import { StyleSheet, View } from 'react-native';
 
 import type { DriveListItem } from '../api/drives';
+import type { DirectSendTarget } from '../api/profiles';
 import {
   BottomNav,
   type AddOrigin,
   type MainTab,
 } from '../components/navigation/BottomNav';
+import { ProfileViewerProvider } from '../profiles/ProfileViewerContext';
 import { MistBackdrop } from '../theme';
 import { BankScreen } from './BankScreen';
 import { CreateDriveSheet } from './CreateDriveSheet';
 import { HomeScreen } from './HomeScreen';
 import { ManageDriveSheet } from './ManageDriveSheet';
+import { ProfilesScreen } from './ProfilesScreen';
 
 /**
- * Authenticated shell after onboarding — Home / Bank + center add.
+ * Authenticated shell after onboarding — Home / People / Bank + center add.
  */
 export function MainShell() {
   const [tab, setTab] = useState<MainTab>('home');
   const [composeOpen, setComposeOpen] = useState(false);
   const [addOrigin, setAddOrigin] = useState<AddOrigin | null>(null);
+  const [directTo, setDirectTo] = useState<DirectSendTarget | null>(null);
   const [managingDrive, setManagingDrive] = useState<DriveListItem | null>(
     null,
   );
@@ -30,43 +34,54 @@ export function MainShell() {
     setBoardRefresh((n) => n + 1);
   };
 
+  const openCompose = (origin: AddOrigin | null, target?: DirectSendTarget) => {
+    setDirectTo(target ?? null);
+    setAddOrigin(origin);
+    setComposeOpen(true);
+  };
+
   return (
     <MistBackdrop>
-      <View style={styles.root}>
-        <View style={styles.page}>
-          {tab === 'home' ? (
-            <HomeScreen
-              refreshToken={boardRefresh}
-              onManageDrive={setManagingDrive}
-            />
-          ) : (
-            <BankScreen />
-          )}
+      <ProfileViewerProvider onSendDirect={(target) => openCompose(null, target)}>
+        <View style={styles.root}>
+          <View style={styles.page}>
+            {tab === 'home' ? (
+              <HomeScreen
+                refreshToken={boardRefresh}
+                onManageDrive={setManagingDrive}
+              />
+            ) : tab === 'profiles' ? (
+              <ProfilesScreen
+                onSendDirect={(target) => openCompose(null, target)}
+              />
+            ) : (
+              <BankScreen />
+            )}
+          </View>
+          <BottomNav
+            active={tab}
+            onChange={setTab}
+            onAddPress={(origin) => openCompose(origin)}
+          />
+          <CreateDriveSheet
+            visible={composeOpen}
+            origin={addOrigin}
+            directTo={directTo}
+            onClose={() => {
+              setComposeOpen(false);
+              setAddOrigin(null);
+              setDirectTo(null);
+            }}
+            onCreated={bumpBoard}
+          />
+          <ManageDriveSheet
+            visible={managingDrive != null}
+            drive={managingDrive}
+            onClose={() => setManagingDrive(null)}
+            onChanged={bumpBoard}
+          />
         </View>
-        <BottomNav
-          active={tab}
-          onChange={setTab}
-          onAddPress={(origin) => {
-            setAddOrigin(origin);
-            setComposeOpen(true);
-          }}
-        />
-        <CreateDriveSheet
-          visible={composeOpen}
-          origin={addOrigin}
-          onClose={() => {
-            setComposeOpen(false);
-            setAddOrigin(null);
-          }}
-          onCreated={bumpBoard}
-        />
-        <ManageDriveSheet
-          visible={managingDrive != null}
-          drive={managingDrive}
-          onClose={() => setManagingDrive(null)}
-          onChanged={bumpBoard}
-        />
-      </View>
+      </ProfileViewerProvider>
     </MistBackdrop>
   );
 }

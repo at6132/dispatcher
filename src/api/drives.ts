@@ -1,5 +1,5 @@
 import type { VehicleClass } from '../auth/types';
-import { apiFetch } from './client';
+import { apiFetch, ApiError } from './client';
 
 export type DriveStatus =
   | 'open'
@@ -10,10 +10,16 @@ export type DriveStatus =
 
 export type TripType = 'one_way' | 'round_trip';
 
+export type DriverAvailability = 'available' | 'busy' | 'offline';
+
 export type PublicProfile = {
   id: string;
   name: string;
   onboardingComplete: boolean;
+  availability?: DriverAvailability;
+  lastLat?: number;
+  lastLng?: number;
+  locationUpdatedAt?: string;
   onboarding?: {
     vehicleClass: VehicleClass;
     vehicleType: string;
@@ -36,6 +42,8 @@ export type Drive = {
   toPlace?: string;
   status: DriveStatus;
   assigneeId?: string;
+  /** Direct offer target — private until accept/decline. */
+  invitedDriverId?: string;
   passengerPhone?: string;
   address?: string;
   vehicleClass?: VehicleClass;
@@ -61,6 +69,8 @@ export type CreateDriveInput = {
   tripType: TripType;
   address?: string;
   extraInfo?: string;
+  /** Offer directly to this driver (they accept/decline). */
+  inviteDriverId?: string;
 };
 
 export type DriveListItem = Drive & {
@@ -97,6 +107,7 @@ function asListItem(raw: Drive & { poster?: PublicProfile; assignee?: PublicProf
       id: raw.posterId,
       name: 'Driver',
       onboardingComplete: false,
+      availability: 'offline',
     },
     ...(raw.assignee ? { assignee: raw.assignee } : {}),
   };
@@ -116,14 +127,79 @@ export async function listDrives(
   };
 }
 
+/**
+ * Direct jobs offered to the current user.
+ * Filters strictly — older APIs may ignore `status=offers` and return the
+ * open board, which must never trigger the IncomingJobModal.
+ */
+export async function listDirectOffers(opts: {
+  viewerId: string;
+  limit?: number;
+}): Promise<DriveListItem[]> {
+  const params = new URLSearchParams('status=offers');
+  if (opts.limit != null) params.set('limit', String(opts.limit));
+  const data = await apiFetch<ListDrivesResult>(
+    `/v1/drives?${params.toString()}`,
+  );
+  return (data.items ?? [])
+    .map(asListItem)
+    .filter(
+      (d) =>
+        d.status === 'open' &&
+        d.invitedDriverId != null &&
+        d.invitedDriverId === opts.viewerId,
+    );
+}
+
+function inviteRouteMissing(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    err.status === 404 &&
+    (err.code === 'not_found' || !err.code || err.code === 'Not found')
+  );
+}
+
+export async function acceptDirectInvite(driveId: string): Promise<Drive> {
+  try {
+    const data = await apiFetch<{ drive: Drive }>(
+      `/v1/drives/${driveId}/accept-invite`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+    return data.drive;
+  } catch (err) {
+    if (inviteRouteMissing(err)) {
+      throw new ApiError(
+        'Accept isn’t available on this server yet. The API needs a redeploy with invite routes.',
+        404,
+        'invite_routes_missing',
+      );
+    }
+    throw err;
+  }
+}
+
+export async function declineDirectInvite(driveId: string): Promise<Drive> {
+  try {
+    const data = await apiFetch<{ drive: Drive }>(
+      `/v1/drives/${driveId}/decline-invite`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+    return data.drive;
+  } catch (err) {
+    if (inviteRouteMissing(err)) {
+      throw new ApiError(
+        'Decline isn’t available on this server yet. The API needs a redeploy with invite routes.',
+        404,
+        'invite_routes_missing',
+      );
+    }
+    throw err;
+  }
+}
+
 export async function getDrive(id: string): Promise<Drive> {
   const data = await apiFetch<{ drive: Drive }>(`/v1/drives/${id}`);
   return data.drive;
-}
-
-export async function getPublicProfile(id: string): Promise<PublicProfile> {
-  const data = await apiFetch<{ user: PublicProfile }>(`/v1/profiles/${id}`);
-  return data.user;
 }
 
 export async function createDrive(input: CreateDriveInput): Promise<Drive> {
@@ -151,6 +227,7 @@ export type DriveApplication = {
   lat?: number;
   lng?: number;
   createdAt: string;
+  favorited?: boolean;
   driver: PublicProfile & { phone?: string };
 };
 

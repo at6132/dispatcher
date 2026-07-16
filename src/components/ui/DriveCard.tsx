@@ -15,17 +15,31 @@ import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Check, X } from 'lucide-react-native';
 
-import type { DriveListItem, DriveStatus } from '../../api/drives';
+import type {
+  DriveBoard,
+  DriveListItem,
+  DriveStatus,
+} from '../../api/drives';
 import { VEHICLE_CLASS_OPTIONS } from '../../auth/types';
 import {
   digitsOnly,
   formatPhoneDisplay,
 } from '../../auth/validation';
-import { colors, fonts, motion, radius, space, type } from '../../theme';
+import {
+  colors,
+  fonts,
+  motion,
+  radius,
+  space,
+  tripRouteColor,
+  type,
+} from '../../theme';
 import { Icon } from './Icon';
 
 export type DriveCardProps = {
   drive: DriveListItem;
+  /** Board section this card is listed under — sharpens route title color. */
+  board?: DriveBoard;
   /** Current user — labels “You posted” / “You’re driving”. */
   viewerId?: string;
   /** Open board only — show Apply when the viewer didn’t post this drive. */
@@ -36,6 +50,8 @@ export type DriveCardProps = {
   onPickedUp?: () => void;
   /** Active board — complete after pickup (picked_up). */
   onComplete?: () => void;
+  /** Open the other party’s full profile. */
+  onOpenProfile?: (userId: string) => void;
   applying?: boolean;
   applied?: boolean;
   pickingUp?: boolean;
@@ -43,6 +59,11 @@ export type DriveCardProps = {
   applyAgain?: boolean;
   /** Dispatched section — map of driver apply location + status chip. */
   showMap?: boolean;
+  /**
+   * History board — absolute trip index (oldest completed = 0).
+   * When set, meta shows trip + date/time instead of date-only.
+   */
+  tripNumber?: number;
 };
 
 const MAP_HEIGHT = 132;
@@ -68,13 +89,19 @@ function formatMoney(cents: number): string {
   return `$${(cents / 100).toFixed(cents % 100 === 0 ? 0 : 2)}`;
 }
 
-function formatWhen(iso: string): string {
+function formatWhen(iso: string, withTime = false): string {
   const d = new Date(iso);
   if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString(undefined, {
+  const date = d.toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
   });
+  if (!withTime) return date;
+  const time = d.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  return `${date} · ${time}`;
 }
 
 async function openUrl(url: string) {
@@ -188,21 +215,25 @@ function ChoiceSheet({ visible, title, options, onClose }: ChoiceSheetProps) {
  */
 export function DriveCard({
   drive,
+  board,
   viewerId,
   onApply,
   onManage,
   onPickedUp,
   onComplete,
+  onOpenProfile,
   applying = false,
   applied = false,
   pickingUp = false,
   applyAgain = false,
   showMap = false,
+  tripNumber,
 }: DriveCardProps) {
   const insets = useSafeAreaInsets();
   const [mapExpanded, setMapExpanded] = useState(false);
   const [phoneSheetOpen, setPhoneSheetOpen] = useState(false);
   const [mapsSheetOpen, setMapsSheetOpen] = useState(false);
+  const routeColor = tripRouteColor(drive.status, board);
   const isPoster = viewerId != null && drive.posterId === viewerId;
   const isAssignee = viewerId != null && drive.assigneeId === viewerId;
   const party = isPoster
@@ -210,6 +241,18 @@ export function DriveCard({
     : isAssignee
       ? drive.poster
       : drive.poster;
+  const partyId =
+    party?.id ??
+    (isPoster
+      ? drive.assigneeId
+      : isAssignee
+        ? drive.posterId
+        : drive.posterId);
+  const canOpenParty =
+    onOpenProfile != null &&
+    partyId != null &&
+    partyId !== viewerId &&
+    !(isPoster && !drive.assignee);
   const partyLabel = isPoster
     ? drive.assignee
       ? 'Driver'
@@ -243,8 +286,11 @@ export function DriveCard({
         ? 'One way'
         : null;
   const vehicleHint = party?.onboarding?.vehicleType?.trim();
+  const historyMeta = tripNumber != null;
+  const whenIso = drive.completedAt ?? drive.updatedAt ?? drive.createdAt;
   const meta = [
-    formatWhen(drive.completedAt ?? drive.createdAt),
+    historyMeta ? `Trip ${tripNumber}` : null,
+    formatWhen(whenIso, historyMeta),
     drive.costCents != null ? formatMoney(drive.costCents) : null,
     classLabel && drive.seats != null
       ? `${classLabel} · ${drive.seats} seats`
@@ -410,7 +456,7 @@ export function DriveCard({
               toolbarEnabled={false}
               showsCompass={false}
               showsPointsOfInterest={false}
-              region={{
+              initialRegion={{
                 latitude: mapCoordinate.latitude,
                 longitude: mapCoordinate.longitude,
                 latitudeDelta: MAP_DELTA,
@@ -469,7 +515,10 @@ export function DriveCard({
                 <Icon icon={X} size="md" color={colors.ink} />
               </Pressable>
               <View style={styles.mapModalMeta} pointerEvents="none">
-                <Text style={styles.mapModalRoute} numberOfLines={2}>
+                <Text
+                  style={[styles.mapModalRoute, { color: routeColor }]}
+                  numberOfLines={2}
+                >
                   {drive.routeText}
                 </Text>
                 {statusBadge('sheet')}
@@ -494,7 +543,7 @@ export function DriveCard({
       <View style={[styles.body, showMap && styles.bodyWithMap]}>
         <View style={styles.top}>
           <View style={styles.routeBlock}>
-            <Text style={styles.route} numberOfLines={2}>
+            <Text style={[styles.route, { color: routeColor }]} numberOfLines={2}>
               {drive.routeText}
             </Text>
             {placeLine ? (
@@ -545,25 +594,72 @@ export function DriveCard({
         ) : null}
 
         <View style={styles.footer}>
-          <View style={styles.party}>
-            <View style={styles.avatar}>
-              {photoUri ? (
-                <Image source={{ uri: photoUri }} style={styles.avatarImage} />
-              ) : (
-                <View style={styles.avatarEmpty}>
-                  <Text style={styles.initial}>{initial}</Text>
-                </View>
-              )}
-            </View>
-            <View style={styles.partyMeta}>
-              <Text style={styles.partyLabel}>{partyLabel}</Text>
-              {partyName ? (
+          {canOpenParty && partyName ? (
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel={`Open ${partyName} profile`}
+              hitSlop={10}
+              onPress={() => onOpenProfile?.(partyId)}
+              style={({ pressed }) => [
+                styles.party,
+                pressed && styles.partyPressed,
+              ]}
+            >
+              <View style={styles.avatar}>
+                {photoUri ? (
+                  <Image source={{ uri: photoUri }} style={styles.avatarImage} />
+                ) : (
+                  <View style={styles.avatarEmpty}>
+                    <Text style={styles.initial}>{initial}</Text>
+                  </View>
+                )}
+              </View>
+              <View style={styles.partyMeta}>
+                <Text style={styles.partyLabel}>{partyLabel}</Text>
                 <Text style={styles.partyName} numberOfLines={1}>
                   {partyName}
                 </Text>
-              ) : null}
+                {party?.availability ? (
+                  <Text style={styles.partyStatus} numberOfLines={1}>
+                    {party.availability === 'available'
+                      ? 'Available'
+                      : party.availability === 'busy'
+                        ? 'Busy'
+                        : 'Offline'}
+                  </Text>
+                ) : null}
+              </View>
+            </Pressable>
+          ) : (
+            <View style={styles.party}>
+              <View style={styles.avatar}>
+                {photoUri ? (
+                  <Image source={{ uri: photoUri }} style={styles.avatarImage} />
+                ) : (
+                  <View style={styles.avatarEmpty}>
+                    <Text style={styles.initial}>{initial}</Text>
+                  </View>
+                )}
+              </View>
+              <View style={styles.partyMeta}>
+                <Text style={styles.partyLabel}>{partyLabel}</Text>
+                {partyName ? (
+                  <Text style={styles.partyName} numberOfLines={1}>
+                    {partyName}
+                  </Text>
+                ) : null}
+                {party?.availability ? (
+                  <Text style={styles.partyStatus} numberOfLines={1}>
+                    {party.availability === 'available'
+                      ? 'Available'
+                      : party.availability === 'busy'
+                        ? 'Busy'
+                        : 'Offline'}
+                  </Text>
+                ) : null}
+              </View>
             </View>
-          </View>
+          )}
           {meta ? (
             <Text style={styles.meta} numberOfLines={1}>
               {meta}
@@ -950,6 +1046,9 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     gap: space.sm,
   },
+  partyPressed: {
+    opacity: 0.88,
+  },
   avatar: {
     width: AVATAR,
     height: AVATAR,
@@ -987,6 +1086,11 @@ const styles = StyleSheet.create({
     fontFamily: fonts.sansMedium,
     fontSize: 14,
     color: colors.inkSoft,
+  },
+  partyStatus: {
+    ...type.label,
+    color: colors.faint,
+    textTransform: 'uppercase',
   },
   meta: {
     ...type.caption,

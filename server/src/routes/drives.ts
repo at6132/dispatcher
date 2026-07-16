@@ -11,10 +11,12 @@ import { assertClientLimits, requireJsonContentType } from '../lib/security.js';
 import { requireAuth, requireUser } from '../middleware/auth.js';
 import {
   acceptApplication,
+  acceptDirectInvite,
   applyToDrive,
   clearApplications,
   completeDrive,
   createDrive,
+  declineDirectInvite,
   getDrive,
   hideDrive,
   listApplications,
@@ -25,7 +27,13 @@ import {
   unassignDrive,
   updateDrive,
 } from '../services/drives.js';
-import { toPublicProfile } from '../services/auth.js';
+import {
+  addFavorite,
+  getDriverProfile,
+  listDriverProfiles,
+  listDriverTripHistory,
+  removeFavorite,
+} from '../services/profiles.js';
 
 async function withIdempotency(
   userId: string,
@@ -118,6 +126,7 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
         extraInfo: z.string().max(2000).optional(),
         fromPlace: z.string().max(200).optional(),
         toPlace: z.string().max(200).optional(),
+        inviteDriverId: z.string().uuid().optional(),
       })
       .safeParse(request.body);
     if (!body.success) return sendError(reply, 400, 'Invalid body', 'invalid_body');
@@ -404,6 +413,60 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
+  app.post('/:id/accept-invite', async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) {
+      return sendError(reply, 400, 'Invalid drive id', 'invalid_params');
+    }
+    try {
+      const user = requireUser(request);
+      await assertClientLimits(request, reply, {
+        name: 'drive_accept_invite',
+        ipLimit: 60,
+        userLimit: 40,
+        windowSec: 60,
+        failClosed: true,
+      });
+      const result = await withIdempotency(user.id, request, reply, async () => {
+        const drive = await acceptDirectInvite(user.id, params.data.id);
+        return { status: 200, body: { drive } };
+      });
+      return reply.status(result.status).send(result.body);
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.post('/:id/decline-invite', async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) {
+      return sendError(reply, 400, 'Invalid drive id', 'invalid_params');
+    }
+    try {
+      const user = requireUser(request);
+      await assertClientLimits(request, reply, {
+        name: 'drive_decline_invite',
+        ipLimit: 60,
+        userLimit: 40,
+        windowSec: 60,
+        failClosed: true,
+      });
+      const result = await withIdempotency(user.id, request, reply, async () => {
+        const drive = await declineDirectInvite(user.id, params.data.id);
+        return { status: 200, body: { drive } };
+      });
+      return reply.status(result.status).send(result.body);
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
   app.post('/:id/unassign', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
     if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
@@ -595,17 +658,114 @@ export const balanceRoutes: FastifyPluginAsync = async (app) => {
 export const profileRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', requireAuth);
 
+  app.get('/', async (request, reply) => {
+    try {
+      const user = requireUser(request);
+      await assertClientLimits(request, reply, {
+        name: 'profile_list',
+        ipLimit: 60,
+        userLimit: 40,
+        windowSec: 60,
+      });
+      const items = await listDriverProfiles(user.id);
+      return reply.send({ items });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.post('/:id/favorite', async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
+    try {
+      const user = requireUser(request);
+      await assertClientLimits(request, reply, {
+        name: 'profile_favorite',
+        ipLimit: 60,
+        userLimit: 40,
+        windowSec: 60,
+        failClosed: true,
+      });
+      await addFavorite(user.id, params.data.id);
+      return reply.status(204).send();
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.delete('/:id/favorite', async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
+    try {
+      const user = requireUser(request);
+      await assertClientLimits(request, reply, {
+        name: 'profile_unfavorite',
+        ipLimit: 60,
+        userLimit: 40,
+        windowSec: 60,
+        failClosed: true,
+      });
+      await removeFavorite(user.id, params.data.id);
+      return reply.status(204).send();
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.get('/:id/history', async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
+    const query = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(50).optional(),
+        cursor: z.string().optional(),
+      })
+      .safeParse(request.query);
+    if (!query.success) {
+      return sendError(reply, 400, 'Invalid query', 'invalid_query');
+    }
+    try {
+      requireUser(request);
+      await assertClientLimits(request, reply, {
+        name: 'profile_history',
+        ipLimit: 60,
+        userLimit: 40,
+        windowSec: 60,
+      });
+      const result = await listDriverTripHistory(params.data.id, {
+        ...(query.data.limit != null ? { limit: query.data.limit } : {}),
+        ...(query.data.cursor ? { cursor: query.data.cursor } : {}),
+      });
+      return reply.send(result);
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
   app.get('/:id', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
     if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
     try {
+      const viewer = requireUser(request);
       await assertClientLimits(request, reply, {
         name: 'profile_get',
         ipLimit: 120,
         userLimit: 90,
         windowSec: 60,
       });
-      const user = await toPublicProfile(params.data.id);
+      const user = await getDriverProfile(viewer.id, params.data.id);
       return reply.send({ user });
     } catch (err) {
       if (err instanceof AppError) {

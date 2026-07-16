@@ -14,7 +14,7 @@ import {
   shortId,
   summarizeBody,
 } from './lib/log.js';
-import { checkRedis, getRedis } from './lib/redis.js';
+import { checkRedis } from './lib/redis.js';
 import { rejectScanPath } from './lib/security.js';
 import {
   notifyTelegram,
@@ -68,11 +68,12 @@ export async function buildApp() {
       return randomUUID();
     },
     disableRequestLogging: true,
-    trustProxy: 1,
+    trustProxy: true,
     bodyLimit: 256_000,
-    requestTimeout: 25_000,
-    connectionTimeout: 10_000,
   });
+
+  // Bind health earliest so Railway probes never wait on plugins.
+  app.get('/healthz', async () => ({ ok: true }));
 
   app.addHook('onRequest', async (request, reply) => {
     rejectScanPath(request);
@@ -145,57 +146,57 @@ export async function buildApp() {
     }
   });
 
-  await app.register(helmet, {
-    global: true,
-    contentSecurityPolicy: false,
-    crossOriginEmbedderPolicy: false,
-    crossOriginResourcePolicy: { policy: 'same-site' },
-    hsts:
-      env.NODE_ENV === 'production'
-        ? { maxAge: 15552000, includeSubDomains: true }
-        : false,
-  });
+  // Optional lean boot for diagnosing Railway proxy hangs.
+  if (process.env.SKIP_EDGE_PLUGINS !== '1') {
+    await app.register(helmet, {
+      global: true,
+      contentSecurityPolicy: false,
+      crossOriginEmbedderPolicy: false,
+      crossOriginResourcePolicy: { policy: 'same-site' },
+      hsts:
+        env.NODE_ENV === 'production'
+          ? { maxAge: 15552000, includeSubDomains: true }
+          : false,
+    });
 
-  const allowedOrigins = (process.env.CORS_ORIGINS ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-  await app.register(cors, {
-    origin: allowedOrigins.length
-      ? (origin, cb) => {
-          if (!origin || allowedOrigins.includes(origin)) {
-            cb(null, true);
-            return;
+    const allowedOrigins = (process.env.CORS_ORIGINS ?? '')
+      .split(',')
+      .map((s) => s.trim())
+      .filter(Boolean);
+    await app.register(cors, {
+      origin: allowedOrigins.length
+        ? (origin, cb) => {
+            if (!origin || allowedOrigins.includes(origin)) {
+              cb(null, true);
+              return;
+            }
+            cb(null, false);
           }
-          cb(null, false);
-        }
-      : false,
-    credentials: false,
-  });
+        : true,
+      credentials: false,
+    });
 
-  await app.register(rateLimit, {
-    global: true,
-    max: 180,
-    timeWindow: '1 minute',
-    redis: getRedis(),
-    nameSpace: 'rl-global:',
-    allowList: (req) => isQuietPath(req.url),
-    addHeaders: {
-      'x-ratelimit-limit': true,
-      'x-ratelimit-remaining': true,
-      'x-ratelimit-reset': true,
-      'retry-after': true,
-    },
-    errorResponseBuilder: (_req, context) => ({
-      error: {
-        message: 'Too many requests',
-        code: 'rate_limited',
-        retryAfter: Math.ceil(context.ttl / 1000),
+    await app.register(rateLimit, {
+      global: true,
+      max: 180,
+      timeWindow: '1 minute',
+      nameSpace: 'rl-global:',
+      allowList: (req) => isQuietPath(req.url),
+      addHeaders: {
+        'x-ratelimit-limit': true,
+        'x-ratelimit-remaining': true,
+        'x-ratelimit-reset': true,
+        'retry-after': true,
       },
-    }),
-  });
-
-  app.get('/healthz', async () => ({ ok: true }));
+      errorResponseBuilder: (_req, context) => ({
+        error: {
+          message: 'Too many requests',
+          code: 'rate_limited',
+          retryAfter: Math.ceil(context.ttl / 1000),
+        },
+      }),
+    });
+  }
 
   app.get('/readyz', async (_req, reply) => {
     const [dbOk, redisOk] = await Promise.all([checkDb(), checkRedis()]);
