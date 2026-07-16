@@ -73,17 +73,17 @@ const STEP_COPY: Record<
   3: {
     lead: 'Allow',
     trail: 'location',
-    body: 'Needed to match you with rides.',
+    body: 'Used when you apply for a ride or share availability. Your exact location is not shown on the board.',
   },
   4: {
     lead: 'Allow',
     trail: 'notifications',
-    body: 'So you hear about jobs and balances.',
+    body: 'Hear about job offers, ride updates, and balances when the app is closed.',
   },
   5: {
     lead: 'Zelle',
     trail: 'info',
-    body: 'If you plan on posting rides, please provide this information.',
+    body: 'Optional. Add a Zelle email or phone so drivers can settle your dispatcher commission.',
   },
 };
 

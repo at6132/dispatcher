@@ -694,7 +694,7 @@ export function ManageDriveSheet({
                         {formatMoney(profitCents)}
                       </Text>
                       <Text style={styles.statusMeta}>
-                        10% of profit — pay/settle outside the app in Bank
+                        10% dispatcher commission — settle off-app in Bank
                       </Text>
                     </View>
                   ) : null}

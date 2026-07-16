@@ -365,9 +365,10 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
               { paddingBottom: insets.bottom + space.xxl },
             ]}
             keyboardShouldPersistTaps="handled"
+            keyboardDismissMode="on-drag"
             showsVerticalScrollIndicator={false}
           >
-            <Pressable onPress={Keyboard.dismiss} accessible={false}>
+            <View>
               {settingsOpen ? (
                 <View style={styles.viewBlock}>
                   <View style={styles.hero}>
@@ -375,7 +376,7 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
                     <Text style={styles.trail}>settings</Text>
                   </View>
                   <Text style={styles.support}>
-                    Notification preferences and more.
+                    Choose which push notifications you want.
                   </Text>
 
                   <View style={styles.settingsSection}>
@@ -438,7 +439,7 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
                           Favorites only = favorited dispatchers.
                         </Text>
                         <ChoiceGroup
-                          label="Submissions cleared"
+                          label="Applications cleared"
                           options={PREF_OPTIONS}
                           value={notifPrefs.applicationCleared}
                           onChange={(v) =>
@@ -446,7 +447,7 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
                           }
                         />
                         <Text style={styles.notifHint}>
-                          When a dispatcher clears applies on a post you
+                          When a dispatcher clears applications on a post you
                           applied to. Favorites = favorited dispatchers.
                         </Text>
                         <ChoiceGroup
@@ -676,7 +677,7 @@ export function ProfileScreen({ visible, onClose }: ProfileScreenProps) {
               )}
                 </>
               )}
-            </Pressable>
+            </View>
           </ScrollView>
         </KeyboardAvoidingView>
       </Animated.View>

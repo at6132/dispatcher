@@ -138,7 +138,7 @@ export function SettlePaidModal({
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.scrollInner}
               >
-                <Text style={styles.eyebrow}>Got paid</Text>
+                <Text style={styles.eyebrow}>Mark settled</Text>
                 <Text style={styles.title} numberOfLines={2}>
                   {target?.name ?? 'Driver'}
                 </Text>

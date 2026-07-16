@@ -117,6 +117,7 @@ export function CreateDriveSheet({
   const [mounted, setMounted] = useState(visible);
 
   const progress = useRef(new Animated.Value(0)).current;
+  const veil = useRef(new Animated.Value(1)).current;
 
   const [title, setTitle] = useState('');
   const [phone, setPhone] = useState('');
@@ -164,9 +165,10 @@ export function CreateDriveSheet({
     if (visible) {
       setMounted(true);
       progress.setValue(0);
+      veil.setValue(1);
       Animated.timing(progress, {
         toValue: 1,
-        duration: 420,
+        duration: 380,
         easing: Easing.bezier(0.22, 1, 0.36, 1),
         useNativeDriver: false,
       }).start();
@@ -175,14 +177,16 @@ export function CreateDriveSheet({
 
     if (!mounted) return;
     setMapReady(false);
-    Animated.timing(progress, {
+    // Fade out in place — reversing the layout morph felt choppy on close.
+    Animated.timing(veil, {
       toValue: 0,
-      duration: 280,
-      easing: Easing.bezier(0.4, 0, 1, 0.2),
+      duration: 160,
+      easing: Easing.out(Easing.quad),
       useNativeDriver: false,
     }).start(({ finished }) => {
       if (finished) {
         setMounted(false);
+        progress.setValue(0);
         setLiveTarget(null);
         resetForm();
       }
@@ -316,7 +320,7 @@ export function CreateDriveSheet({
       presentationStyle="overFullScreen"
       onRequestClose={requestClose}
     >
-      <View style={styles.root}>
+      <Animated.View style={[styles.root, { opacity: veil }]}>
         <Animated.View style={[styles.fullScreen, { opacity: screenOpacity }]}>
           <MistBackdrop style={styles.fill} />
         </Animated.View>
@@ -510,7 +514,7 @@ export function CreateDriveSheet({
             </ScrollView>
           </KeyboardAvoidingView>
         </Animated.View>
-      </View>
+      </Animated.View>
     </Modal>
   );
 }

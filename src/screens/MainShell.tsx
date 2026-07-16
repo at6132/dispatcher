@@ -1,6 +1,5 @@
 import { useEffect, useState } from 'react';
 import { StyleSheet, View } from 'react-native';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { DriveListItem } from '../api/drives';
 import type { DirectSendTarget } from '../api/profiles';
@@ -16,14 +15,13 @@ import { BankScreen } from './BankScreen';
 import { CreateDriveSheet } from './CreateDriveSheet';
 import { HomeScreen } from './HomeScreen';
 import { ManageDriveSheet } from './ManageDriveSheet';
-import { ProfileButton, ProfileScreen } from './ProfileScreen';
+import { ProfileScreen } from './ProfileScreen';
 import { ProfilesScreen } from './ProfilesScreen';
 
 /**
- * Authenticated shell after onboarding — Home / People / Bank + center add.
+ * Authenticated shell after onboarding — Home / People / Bank / You + center add.
  */
 export function MainShell() {
-  const insets = useSafeAreaInsets();
   const [tab, setTab] = useState<MainTab>('home');
   const [composeOpen, setComposeOpen] = useState(false);
   const [addOrigin, setAddOrigin] = useState<AddOrigin | null>(null);
@@ -58,7 +56,6 @@ export function MainShell() {
               <HomeScreen
                 refreshToken={boardRefresh}
                 onManageDrive={setManagingDrive}
-                onPeoplePress={() => setTab('profiles')}
               />
             ) : tab === 'profiles' ? (
               <ProfilesScreen
@@ -70,12 +67,13 @@ export function MainShell() {
           </View>
           <BottomNav
             active={tab}
-            onChange={setTab}
+            onChange={(next) => {
+              setProfileOpen(false);
+              setTab(next);
+            }}
             onAddPress={(origin) => openCompose(origin)}
-          />
-          <ProfileButton
-            topInset={insets.top}
-            onPress={() => setProfileOpen(true)}
+            onProfilePress={() => setProfileOpen(true)}
+            profileActive={profileOpen}
           />
           <CreateDriveSheet
             visible={composeOpen}

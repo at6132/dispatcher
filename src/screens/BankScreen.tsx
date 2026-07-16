@@ -197,14 +197,15 @@ export function BankScreen() {
         />
       }
     >
-      <View style={[styles.hero, { paddingRight: 40 + space.md }]}>
+      <View style={styles.hero}>
         <Text style={styles.eyebrow}>Balances</Text>
         <Text style={styles.title}>
           <Text style={styles.titleLead}>Your </Text>
           <Text style={styles.titleItalic}>bank</Text>
         </Text>
         <Text style={styles.support}>
-          10% from completed jobs. Pay outside the app, then mark settled here.
+          10% dispatcher commission from completed jobs. Pay outside the app
+          (Zelle, Venmo, cash), then mark settled here.
         </Text>
       </View>
 
@@ -225,23 +226,25 @@ export function BankScreen() {
               <Text style={styles.balanceEyebrow}>Bank</Text>
             </View>
             <View style={styles.profitBlock}>
-              <Text style={styles.totalLabel}>Total profit</Text>
+              <Text style={styles.totalLabel}>Total commission earned</Text>
               <Text style={styles.balanceAmount}>
                 {formatUsd(totalProfitCents)}
               </Text>
-              <Text style={styles.profitHint}>Includes settled</Text>
+              <Text style={styles.profitHint}>
+                Lifetime 10% — open and settled
+              </Text>
             </View>
             <View style={styles.totalsDivider} />
             <View style={styles.totalsRow}>
               <View style={styles.totalCol}>
                 <Text style={styles.totalLabel}>Owed to you</Text>
-                <Text style={styles.balanceAmountSecondary}>
+                <Text style={styles.totalIncoming}>
                   {formatUsd(owedToYouCents)}
                 </Text>
               </View>
               <View style={styles.totalCol}>
                 <Text style={styles.totalLabel}>You owe</Text>
-                <Text style={styles.balanceAmountSecondary}>
+                <Text style={styles.totalOutgoing}>
                   {formatUsd(youOweCents)}
                 </Text>
               </View>
@@ -267,7 +270,7 @@ export function BankScreen() {
                           {formatTrips(g.tripCount)} · {formatDue(g.dueSunday)}
                         </Text>
                       </View>
-                      <Text style={styles.rowAmount}>
+                      <Text style={[styles.rowAmount, styles.amountOutgoing]}>
                         {formatUsd(g.amountCents)}
                       </Text>
                     </View>
@@ -280,7 +283,8 @@ export function BankScreen() {
                       <Text style={styles.rowDetail}>Zelle {g.party.zelle}</Text>
                     ) : null}
                     <Text style={styles.rowHint}>
-                      Pay off-app. They mark it settled.
+                      Pay the dispatcher off-app. They mark it settled when they
+                      receive it.
                     </Text>
                   </GlassSurface>
                 ))}
@@ -307,7 +311,7 @@ export function BankScreen() {
                           {formatTrips(g.tripCount)} · {formatDue(g.dueSunday)}
                         </Text>
                       </View>
-                      <Text style={styles.rowAmount}>
+                      <Text style={[styles.rowAmount, styles.amountIncoming]}>
                         {formatUsd(g.amountCents)}
                       </Text>
                     </View>
@@ -316,12 +320,16 @@ export function BankScreen() {
                         {formatPhoneDisplay(g.party.phone)}
                       </Text>
                     ) : null}
+                    <Text style={styles.rowHint}>
+                      Your 10% dispatcher commission. Mark settled after you’re
+                      paid off-app.
+                    </Text>
                     <Button
                       variant="primary"
                       onPress={() => openSettle(g)}
                       style={styles.settleBtn}
                     >
-                      Got paid
+                      Mark settled
                     </Button>
                   </GlassSurface>
                 ))}
@@ -431,12 +439,25 @@ const styles = StyleSheet.create({
     lineHeight: 42,
     color: colors.ink,
   },
-  balanceAmountSecondary: {
+  totalIncoming: {
     fontFamily: fonts.display,
-    fontSize: 28,
-    letterSpacing: -0.5,
-    lineHeight: 34,
-    color: colors.muted,
+    fontSize: 36,
+    letterSpacing: -1,
+    lineHeight: 42,
+    color: colors.success,
+  },
+  totalOutgoing: {
+    fontFamily: fonts.display,
+    fontSize: 36,
+    letterSpacing: -1,
+    lineHeight: 42,
+    color: colors.danger,
+  },
+  amountIncoming: {
+    color: colors.success,
+  },
+  amountOutgoing: {
+    color: colors.danger,
   },
   section: {
     gap: space.md,

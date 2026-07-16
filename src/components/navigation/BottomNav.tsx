@@ -1,6 +1,7 @@
 import { useRef, useState } from 'react';
 import {
   Animated,
+  Image,
   Platform,
   Pressable,
   StyleSheet,
@@ -13,9 +14,10 @@ import { BlurView } from 'expo-blur';
 import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
-import { Home, Landmark, Plus } from 'lucide-react-native';
+import { Home, Landmark, Plus, Users } from 'lucide-react-native';
 import type { LucideIcon } from 'lucide-react-native';
 
+import { useAuth } from '../../auth/AuthContext';
 import { Icon } from '../ui/Icon';
 import { blur, colors, fonts, motion, space, type } from '../../theme';
 import {
@@ -26,6 +28,8 @@ import {
 } from './dockPath';
 
 export type MainTab = 'home' | 'profiles' | 'bank';
+
+/** Window coords of the + face — used to warp the compose screen open. */
 export type AddOrigin = {
   x: number;
   y: number;
@@ -36,11 +40,13 @@ export type AddOrigin = {
 type BottomNavProps = {
   active: MainTab;
   onChange: (tab: MainTab) => void;
-  onAddPress?: (origin: AddOrigin | null) => void;
+  onAddPress?: (origin: AddOrigin) => void;
+  onProfilePress?: () => void;
+  profileActive?: boolean;
 };
 
 /**
- * Compact organic dock — glass hugs Home · + · Bank.
+ * Compact organic dock — glass hugs Home · People · + · Bank · You.
  */
 const FACE = 88;
 /** Thin rim around the plus — just enough to read the hug. */
@@ -55,7 +61,8 @@ const FACE_GAP = 4;
 const TAB_W = 56;
 /** Glass past the outer tabs. */
 const SIDE_PAD = 6;
-const DOCK_W = SIDE_PAD + TAB_W + FACE + FACE_GAP * 2 + TAB_W + SIDE_PAD;
+const DOCK_W =
+  SIDE_PAD + TAB_W * 2 + FACE + FACE_GAP * 2 + TAB_W * 2 + SIDE_PAD;
 
 const GEOM: DockGeom = {
   midH: MID_H,
@@ -64,11 +71,18 @@ const GEOM: DockGeom = {
 
 const DOCK_H = dockCanvasHeight(GEOM);
 const CIRCLE_CY = dockCircleCenterY(GEOM);
+const AVATAR = 28;
 
 /**
- * Floating dock — one continuous glass blob: Home · + · Bank.
+ * Floating dock — Home · People · + · Bank · You.
  */
-export function BottomNav({ active, onChange, onAddPress }: BottomNavProps) {
+export function BottomNav({
+  active,
+  onChange,
+  onAddPress,
+  onProfilePress,
+  profileActive = false,
+}: BottomNavProps) {
   const insets = useSafeAreaInsets();
   const bottomPad = Math.max(insets.bottom, space.sm);
   const [width, setWidth] = useState(0);
@@ -97,18 +111,28 @@ export function BottomNav({ active, onChange, onAddPress }: BottomNavProps) {
           <View style={styles.tabCluster}>
             <NavItem
               label="Home"
-              active={active === 'home'}
+              active={active === 'home' && !profileActive}
               onPress={() => onChange('home')}
               icon={Home}
+            />
+            <NavItem
+              label="People"
+              active={active === 'profiles' && !profileActive}
+              onPress={() => onChange('profiles')}
+              icon={Users}
             />
           </View>
           <View style={styles.faceSpacer} />
           <View style={[styles.tabCluster, styles.tabClusterRight]}>
             <NavItem
               label="Bank"
-              active={active === 'bank'}
+              active={active === 'bank' && !profileActive}
               onPress={() => onChange('bank')}
               icon={Landmark}
+            />
+            <ProfileNavItem
+              active={profileActive}
+              onPress={() => onProfilePress?.()}
             />
           </View>
         </View>
@@ -250,11 +274,16 @@ function NavItem({ label, active, onPress, icon }: NavItemProps) {
   );
 }
 
-function AddButton({
+function ProfileNavItem({
+  active,
   onPress,
 }: {
-  onPress?: (origin: AddOrigin | null) => void;
+  active: boolean;
+  onPress: () => void;
 }) {
+  const { user } = useAuth();
+  const uri = user?.onboarding?.selfPhotoUri;
+  const initial = (user?.name?.trim().charAt(0) || '?').toUpperCase();
   const scale = useRef(new Animated.Value(1)).current;
 
   const animateTo = (value: number) => {
@@ -266,23 +295,77 @@ function AddButton({
   };
 
   return (
-    <Animated.View style={{ transform: [{ scale }] }}>
+    <Animated.View style={[styles.item, { transform: [{ scale }] }]}>
       <Pressable
-        accessibilityRole="button"
-        accessibilityLabel="Add"
-        onPress={() => onPress?.(null)}
+        accessibilityRole="tab"
+        accessibilityState={{ selected: active }}
+        accessibilityLabel="Your profile"
+        onPress={onPress}
         onPressIn={() => animateTo(motion.pressScale)}
         onPressOut={() => animateTo(1)}
-        style={({ pressed }) => [styles.face, pressed && styles.facePressed]}
-        hitSlop={4}
+        style={({ pressed }) => [
+          styles.itemPress,
+          pressed && styles.itemPressed,
+        ]}
+        hitSlop={8}
       >
-        <Icon
-          icon={Plus}
-          size={PLUS}
-          color={colors.onAccent}
-          strokeWidth={2.6}
-        />
+        <View
+          style={[styles.profileAvatar, active && styles.profileAvatarActive]}
+        >
+          {uri ? (
+            <Image source={{ uri }} style={styles.profileAvatarImage} />
+          ) : (
+            <Text style={styles.profileAvatarInitial}>{initial}</Text>
+          )}
+        </View>
+        <Text
+          style={[styles.itemLabel, active ? styles.itemLabelActive : null]}
+        >
+          You
+        </Text>
       </Pressable>
+    </Animated.View>
+  );
+}
+
+function AddButton({ onPress }: { onPress?: (origin: AddOrigin) => void }) {
+  const faceRef = useRef<View>(null);
+  const scale = useRef(new Animated.Value(1)).current;
+
+  const animateTo = (value: number) => {
+    Animated.timing(scale, {
+      toValue: value,
+      duration: motion.durationFast,
+      useNativeDriver: true,
+    }).start();
+  };
+
+  const handlePress = () => {
+    faceRef.current?.measureInWindow((x, y, width, height) => {
+      onPress?.({ x, y, width, height });
+    });
+  };
+
+  return (
+    <Animated.View style={{ transform: [{ scale }] }}>
+      <View ref={faceRef} collapsable={false}>
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel="Add"
+          onPress={handlePress}
+          onPressIn={() => animateTo(motion.pressScale)}
+          onPressOut={() => animateTo(1)}
+          style={({ pressed }) => [styles.face, pressed && styles.facePressed]}
+          hitSlop={4}
+        >
+          <Icon
+            icon={Plus}
+            size={PLUS}
+            color={colors.onAccent}
+            strokeWidth={2.6}
+          />
+        </Pressable>
+      </View>
     </Animated.View>
   );
 }
@@ -356,11 +439,34 @@ const styles = StyleSheet.create({
   itemLabelActive: {
     color: colors.ink,
   },
+  profileAvatar: {
+    width: AVATAR,
+    height: AVATAR,
+    borderRadius: AVATAR / 2,
+    overflow: 'hidden',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: colors.accentMuted,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassBorder,
+  },
+  profileAvatarActive: {
+    borderColor: colors.accent,
+  },
+  profileAvatarImage: {
+    width: '100%',
+    height: '100%',
+  },
+  profileAvatarInitial: {
+    fontFamily: fonts.display,
+    fontSize: 14,
+    color: colors.accent,
+  },
   faceSpacer: {
     width: FACE + FACE_GAP * 2,
   },
   tabCluster: {
-    width: TAB_W,
+    width: TAB_W * 2,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'flex-end',

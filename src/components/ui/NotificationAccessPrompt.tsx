@@ -157,8 +157,8 @@ export function NotificationAccessPrompt({ onAccessChange }: Props) {
     <View style={styles.card}>
       <Text style={styles.title}>Allow notifications</Text>
       <Text style={styles.body}>
-        Dispatcher uses notifications so you know when someone applies, when you
-        get a job, and when a balance is due — even with weak signal later.
+        Hear about job offers, ride updates, and balances — including when the
+        app is closed.
       </Text>
       <Button onPress={() => void askForNotifications()} loading={busy}>
         Allow notifications

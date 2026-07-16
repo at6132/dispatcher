@@ -10,7 +10,6 @@ import {
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Send, Heart } from 'lucide-react-native';
 
-import type { DriverAvailability } from '../api/drives';
 import {
   favoriteProfile,
   listProfiles,
@@ -28,7 +27,6 @@ import { bottomNavClearance } from '../components/navigation/BottomNav';
 import { Button } from '../components/ui/Button';
 import { ChoiceGroup } from '../components/ui/ChoiceGroup';
 import { DriverCard } from '../components/ui/DriverCard';
-import { getCachedCoordinate } from '../components/ui/getCachedCoordinate';
 import { Icon } from '../components/ui/Icon';
 import { LoadingHint } from '../components/ui/LoadingHint';
 import { TextField } from '../components/ui/TextField';
@@ -48,15 +46,6 @@ type ProfilesScreenProps = {
   onSendDirect: (target: DirectSendTarget) => void;
 };
 
-const AVAILABILITY_OPTIONS: {
-  value: DriverAvailability;
-  label: string;
-}[] = [
-  { value: 'available', label: 'Available' },
-  { value: 'busy', label: 'Busy' },
-  { value: 'offline', label: 'Offline' },
-];
-
 const VEHICLE_FILTER_OPTIONS: { value: VehicleClass | 'any'; label: string }[] =
   [{ value: 'any', label: 'Any' }, ...VEHICLE_CLASS_OPTIONS];
 
@@ -71,28 +60,6 @@ function profileDetail(item: ProfileListItem): string | undefined {
     );
   }
   return parts.length ? parts.join(' · ') : undefined;
-}
-
-function availabilityLabel(status: DriverAvailability | undefined) {
-  switch (status) {
-    case 'available':
-      return 'Available';
-    case 'busy':
-      return 'Busy';
-    default:
-      return 'Offline';
-  }
-}
-
-function availabilityTone(status: DriverAvailability | undefined) {
-  switch (status) {
-    case 'available':
-      return colors.success;
-    case 'busy':
-      return colors.accent;
-    default:
-      return colors.muted;
-  }
 }
 
 function toSendTarget(item: ProfileListItem): DirectSendTarget {
@@ -114,15 +81,14 @@ function toSendTarget(item: ProfileListItem): DirectSendTarget {
 
 export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
   const insets = useSafeAreaInsets();
-  const { user, updatePresence } = useAuth();
+  const { user } = useAuth();
   const { openProfile, favoriteEpoch } = useProfileViewer();
-  const [tab, setTab] = useState<PeopleTab>('all');
+  const [tab, setTab] = useState<PeopleTab>('favorites');
   const [items, setItems] = useState<ProfileListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
-  const [presenceBusy, setPresenceBusy] = useState(false);
   const [query, setQuery] = useState('');
   const [vehicleFilter, setVehicleFilter] = useState<VehicleClass | 'any'>(
     'any',
@@ -148,8 +114,8 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
         if (fromBoardFallback) {
           setError(
             next.length === 0
-              ? 'People list isn’t on the server yet — no drivers on the board to show.'
-              : 'Showing drivers from the board. Full directory needs an API update.',
+              ? 'No other drivers on the board yet. Pull to refresh after people post.'
+              : 'Showing drivers from recent board activity. Pull to refresh for the latest list.',
           );
         }
       } catch (err) {
@@ -181,57 +147,6 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
       void load('refresh');
     }
   }, [favoriteEpoch, load]);
-
-  useEffect(() => {
-    let cancelled = false;
-    const bumpLocation = async () => {
-      if (!user?.onboardingComplete) return;
-      if ((user.availability ?? 'offline') === 'offline') return;
-      const coord = await getCachedCoordinate();
-      if (!coord || cancelled) return;
-      try {
-        await updatePresence({ lat: coord.lat, lng: coord.lng });
-      } catch {
-        // Presence location is best-effort
-      }
-    };
-    void bumpLocation();
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.onboardingComplete, user?.availability, updatePresence]);
-
-  const onSetAvailability = async (availability: DriverAvailability) => {
-    if (!user) return;
-    const previous = user.availability ?? 'offline';
-    setPresenceBusy(true);
-    setError(null);
-    // Optimistic — don’t wait on GPS before flipping the chip
-    try {
-      await updatePresence({ availability });
-    } catch (err) {
-      setError(mapApiError(err).message);
-      try {
-        await updatePresence({ availability: previous });
-      } catch {
-        // ignore revert failure
-      }
-      setPresenceBusy(false);
-      return;
-    }
-    // Location is best-effort after status sticks
-    if (availability !== 'offline') {
-      try {
-        const coord = await getCachedCoordinate();
-        if (coord) {
-          await updatePresence({ lat: coord.lat, lng: coord.lng });
-        }
-      } catch {
-        // ignore
-      }
-    }
-    setPresenceBusy(false);
-  };
 
   const onToggleFavorite = async (item: ProfileListItem) => {
     if (!user?.id) return;
@@ -321,47 +236,9 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
           <Text style={styles.titleItalic}>people</Text>
         </Text>
         <Text style={styles.support}>
-          Heart drivers you trust — hearts stick on their profile and land in
-          Favorites. Browse All, then send a job directly.
+          Favorites are drivers you trust. Open All to browse, tap the heart to
+          save them, then send a job directly from their profile.
         </Text>
-      </View>
-
-      <View style={styles.presenceBlock}>
-        <Text style={styles.sectionLabel}>Your status</Text>
-        <View style={styles.presenceRow}>
-          {AVAILABILITY_OPTIONS.map((opt) => {
-            const active = (user?.availability ?? 'offline') === opt.value;
-            return (
-              <Pressable
-                key={opt.value}
-                accessibilityRole="button"
-                accessibilityState={{ selected: active }}
-                disabled={presenceBusy}
-                onPress={() => void onSetAvailability(opt.value)}
-                style={[
-                  styles.statusChip,
-                  active && styles.statusChipActive,
-                  presenceBusy && styles.statusChipDisabled,
-                ]}
-              >
-                <View
-                  style={[
-                    styles.statusDot,
-                    { backgroundColor: availabilityTone(opt.value) },
-                  ]}
-                />
-                <Text
-                  style={[
-                    styles.statusChipLabel,
-                    active && styles.statusChipLabelActive,
-                  ]}
-                >
-                  {opt.label}
-                </Text>
-              </Pressable>
-            );
-          })}
-        </View>
       </View>
 
       <View style={styles.tabs} accessibilityRole="tablist">
@@ -572,45 +449,6 @@ const styles = StyleSheet.create({
     color: colors.inkSoft,
     maxWidth: 340,
   },
-  presenceBlock: {
-    gap: space.sm,
-  },
-  presenceRow: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: space.sm,
-  },
-  statusChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    paddingVertical: space.sm,
-    paddingHorizontal: space.md,
-    borderRadius: radius.control,
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.glassBorder,
-    backgroundColor: colors.field,
-  },
-  statusChipActive: {
-    borderColor: colors.accent,
-    backgroundColor: colors.accentMuted,
-  },
-  statusChipDisabled: {
-    opacity: 0.55,
-  },
-  statusChipLabel: {
-    ...type.label,
-    fontFamily: fonts.sansMedium,
-    color: colors.muted,
-  },
-  statusChipLabelActive: {
-    color: colors.ink,
-  },
-  statusDot: {
-    width: 7,
-    height: 7,
-    borderRadius: 4,
-  },
   tabs: {
     flexDirection: 'row',
     gap: space.sm,
@@ -637,10 +475,6 @@ const styles = StyleSheet.create({
   },
   filters: {
     gap: space.md,
-  },
-  sectionLabel: {
-    ...type.label,
-    color: colors.muted,
   },
   stateBlock: {
     gap: space.md,

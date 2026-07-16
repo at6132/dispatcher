@@ -23,8 +23,6 @@ import {
   type NativeSyntheticEvent,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Users } from 'lucide-react-native';
-
 import {
   applyToDrive,
   listDirectOffers,
@@ -34,6 +32,7 @@ import {
   type Drive,
   type DriveBoard,
   type DriveListItem,
+  type DriverAvailability,
 } from '../api/drives';
 import { isApiError, mapApiError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
@@ -43,7 +42,6 @@ import { Button } from '../components/ui/Button';
 import { CompleteDriveModal } from '../components/ui/CompleteDriveModal';
 import { DriveCard } from '../components/ui/DriveCard';
 import { getCachedCoordinate } from '../components/ui/getCachedCoordinate';
-import { Icon } from '../components/ui/Icon';
 import { IncomingJobModal } from '../components/ui/IncomingJobModal';
 import { LoadingHint } from '../components/ui/LoadingHint';
 import { driverMatchesOpenDrive } from '../drives/matchDrive';
@@ -65,6 +63,26 @@ const BOARDS: {
 ];
 
 const BOARD_COUNT = BOARDS.length;
+
+const AVAILABILITY_OPTIONS: {
+  value: DriverAvailability;
+  label: string;
+}[] = [
+  { value: 'available', label: 'Available' },
+  { value: 'busy', label: 'Busy' },
+  { value: 'offline', label: 'Offline' },
+];
+
+function availabilityTone(status: DriverAvailability) {
+  switch (status) {
+    case 'available':
+      return colors.success;
+    case 'busy':
+      return colors.accent;
+    default:
+      return colors.muted;
+  }
+}
 
 type BoardState = {
   items: DriveListItem[];
@@ -125,17 +143,14 @@ type HomeScreenProps = {
   refreshToken?: number;
   /** Manage a drive you posted (open applicants, or active/history status). */
   onManageDrive?: (drive: DriveListItem) => void;
-  /** Open the shared driver directory. */
-  onPeoplePress?: () => void;
 };
 
 export function HomeScreen({
   refreshToken = 0,
   onManageDrive,
-  onPeoplePress,
 }: HomeScreenProps) {
   const insets = useSafeAreaInsets();
-  const { user } = useAuth();
+  const { user, updatePresence } = useAuth();
   const { openProfile } = useProfileViewer();
   const pagerRef = useRef<ComponentRef<typeof Animated.ScrollView>>(null);
   const { width: pageWidth } = useWindowDimensions();
@@ -143,6 +158,7 @@ export function HomeScreen({
   const indexRef = useRef(0);
   const [index, setIndex] = useState(0);
   const [trackWidth, setTrackWidth] = useState(0);
+  const [presenceBusy, setPresenceBusy] = useState(false);
   const [boards, setBoards] = useState<Record<DriveBoard, BoardState>>({
     open: emptyBoard(),
     active: emptyBoard(),
@@ -184,6 +200,53 @@ export function HomeScreen({
       // Older APIs / offline — no offer popup
     }
   }, [user?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    const bumpLocation = async () => {
+      if (!user?.onboardingComplete) return;
+      if ((user.availability ?? 'offline') === 'offline') return;
+      const coord = await getCachedCoordinate();
+      if (!coord || cancelled) return;
+      try {
+        await updatePresence({ lat: coord.lat, lng: coord.lng });
+      } catch {
+        // Presence location is best-effort
+      }
+    };
+    void bumpLocation();
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.onboardingComplete, user?.availability, updatePresence]);
+
+  const onSetAvailability = async (availability: DriverAvailability) => {
+    if (!user) return;
+    const previous = user.availability ?? 'offline';
+    setPresenceBusy(true);
+    try {
+      await updatePresence({ availability });
+    } catch {
+      try {
+        await updatePresence({ availability: previous });
+      } catch {
+        // ignore revert failure
+      }
+      setPresenceBusy(false);
+      return;
+    }
+    if (availability !== 'offline') {
+      try {
+        const coord = await getCachedCoordinate();
+        if (coord) {
+          await updatePresence({ lat: coord.lat, lng: coord.lng });
+        }
+      } catch {
+        // ignore
+      }
+    }
+    setPresenceBusy(false);
+  };
 
   const loadBoard = useCallback(
     async (board: DriveBoard, mode: 'initial' | 'refresh' = 'initial') => {
@@ -555,8 +618,44 @@ export function HomeScreen({
           },
         ]}
       >
-        <View style={styles.headerRow}>
-        <GlassSurface style={[styles.pill, styles.pillGrow]} contentStyle={styles.pillInner} flat>
+        <View style={styles.presenceBlock}>
+          <Text style={styles.presenceLabel}>Your status</Text>
+          <View style={styles.presenceRow}>
+            {AVAILABILITY_OPTIONS.map((opt) => {
+              const active = (user?.availability ?? 'offline') === opt.value;
+              return (
+                <Pressable
+                  key={opt.value}
+                  accessibilityRole="button"
+                  accessibilityState={{ selected: active }}
+                  disabled={presenceBusy}
+                  onPress={() => void onSetAvailability(opt.value)}
+                  style={[
+                    styles.statusChip,
+                    active && styles.statusChipActive,
+                    presenceBusy && styles.statusChipDisabled,
+                  ]}
+                >
+                  <View
+                    style={[
+                      styles.statusDot,
+                      { backgroundColor: availabilityTone(opt.value) },
+                    ]}
+                  />
+                  <Text
+                    style={[
+                      styles.statusChipLabel,
+                      active && styles.statusChipLabelActive,
+                    ]}
+                  >
+                    {opt.label}
+                  </Text>
+                </Pressable>
+              );
+            })}
+          </View>
+        </View>
+        <GlassSurface style={styles.pill} contentStyle={styles.pillInner} flat>
           <View
             style={styles.segments}
             accessibilityRole="tablist"
@@ -605,20 +704,6 @@ export function HomeScreen({
             })}
           </View>
         </GlassSurface>
-        {onPeoplePress ? (
-          <Pressable
-            accessibilityRole="button"
-            accessibilityLabel="People"
-            onPress={onPeoplePress}
-            style={({ pressed }) => [
-              styles.peopleButton,
-              pressed && styles.peopleButtonPressed,
-            ]}
-          >
-            <Icon icon={Users} size="md" color={colors.inkSoft} />
-          </Pressable>
-        ) : null}
-        </View>
       </View>
 
       <Animated.ScrollView
@@ -757,30 +842,55 @@ const styles = StyleSheet.create({
     maxWidth: 440,
     alignSelf: 'center',
     marginBottom: space.lg,
+    gap: space.md,
+  },
+  presenceBlock: {
+    gap: space.sm,
+  },
+  presenceLabel: {
+    ...type.label,
+    color: colors.muted,
+    textTransform: 'uppercase',
+    paddingLeft: space.xs,
+  },
+  presenceRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: space.sm,
+  },
+  statusChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: space.sm,
+    paddingHorizontal: space.md,
+    borderRadius: radius.control,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassBorder,
+    backgroundColor: colors.field,
+  },
+  statusChipActive: {
+    borderColor: colors.accent,
+    backgroundColor: colors.accentMuted,
+  },
+  statusChipDisabled: {
+    opacity: 0.55,
+  },
+  statusChipLabel: {
+    ...type.label,
+    fontFamily: fonts.sansMedium,
+    color: colors.muted,
+  },
+  statusChipLabelActive: {
+    color: colors.ink,
+  },
+  statusDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 4,
   },
   pill: {
     borderRadius: radius.xl,
-  },
-  pillGrow: {
-    flex: 1,
-  },
-  headerRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: space.sm,
-  },
-  peopleButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.glassBorder,
-    backgroundColor: colors.glass,
-  },
-  peopleButtonPressed: {
-    opacity: 0.85,
   },
   pillInner: {
     padding: 4,
