@@ -16,6 +16,9 @@ import {
   initialWindowMetrics,
 } from 'react-native-safe-area-context';
 
+import {
+  needsDevicePermissionsSetup,
+} from './src/auth/devicePermissionsStore';
 import { AuthProvider, useAuth } from './src/auth/AuthContext';
 import type { AuthRoute } from './src/auth/types';
 import { LoadingHint } from './src/components/ui/LoadingHint';
@@ -23,19 +26,48 @@ import { logger } from './src/debug/logger';
 import { AuthScreen } from './src/screens/auth/AuthScreen';
 import { ContactSupportScreen } from './src/screens/auth/ContactSupportScreen';
 import { MainShell } from './src/screens/MainShell';
+import { DevicePermissionsScreen } from './src/screens/onboarding/DevicePermissionsScreen';
 import { OnboardingScreen } from './src/screens/onboarding/OnboardingScreen';
 import { colors } from './src/theme';
 
 function Root() {
   const { status, user } = useAuth();
   const [route, setRoute] = useState<AuthRoute>('auth');
+  /** null = still checking; true = need location + notification prompts */
+  const [needsDevicePerms, setNeedsDevicePerms] = useState<boolean | null>(
+    null,
+  );
+
+  useEffect(() => {
+    if (status !== 'authenticated' || !user?.onboardingComplete) {
+      setNeedsDevicePerms(null);
+      return;
+    }
+
+    let cancelled = false;
+    setNeedsDevicePerms(null);
+    void needsDevicePermissionsSetup().then((needs) => {
+      if (!cancelled) setNeedsDevicePerms(needs);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [status, user?.id, user?.onboardingComplete]);
 
   useEffect(() => {
     if (status === 'bootstrapping') return;
     if (status === 'authenticated') {
+      const screen = !user?.onboardingComplete
+        ? 'onboarding'
+        : needsDevicePerms === null
+          ? 'devicePermissions.check'
+          : needsDevicePerms
+            ? 'devicePermissions'
+            : 'main';
       logger.info('nav', 'gate', {
-        screen: user?.onboardingComplete ? 'main' : 'onboarding',
+        screen,
         onboardingComplete: user?.onboardingComplete ?? false,
+        needsDevicePerms,
         userId: user?.id,
       });
       return;
@@ -43,7 +75,13 @@ function Root() {
     logger.info('nav', 'gate', {
       screen: route === 'contactSupport' ? 'support' : 'auth',
     });
-  }, [status, user?.id, user?.onboardingComplete, route]);
+  }, [
+    status,
+    user?.id,
+    user?.onboardingComplete,
+    needsDevicePerms,
+    route,
+  ]);
 
   if (status === 'bootstrapping') {
     return (
@@ -56,6 +94,20 @@ function Root() {
   if (status === 'authenticated') {
     if (!user?.onboardingComplete) {
       return <OnboardingScreen />;
+    }
+    if (needsDevicePerms === null) {
+      return (
+        <View style={styles.boot}>
+          <LoadingHint label="Checking session…" variant="block" />
+        </View>
+      );
+    }
+    if (needsDevicePerms) {
+      return (
+        <DevicePermissionsScreen
+          onComplete={() => setNeedsDevicePerms(false)}
+        />
+      );
     }
     return <MainShell />;
   }

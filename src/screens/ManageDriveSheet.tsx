@@ -431,7 +431,7 @@ export function ManageDriveSheet({
         : null;
   const profitCents =
     sheetDrive.status === 'completed' && sheetDrive.costCents != null
-      ? Math.round(sheetDrive.costCents * 0.1)
+      ? Math.round(sheetDrive.costCents * 0.12)
       : null;
 
   return (
@@ -695,7 +695,7 @@ export function ManageDriveSheet({
                         {formatMoney(profitCents)}
                       </Text>
                       <Text style={styles.statusMeta}>
-                        10% dispatcher commission — settle off-app in Bank
+                        12% dispatcher commission — settle off-app in Bank
                       </Text>
                     </View>
                   ) : null}

@@ -7,6 +7,7 @@ import { ApplicationsPage } from './pages/ApplicationsPage';
 import { AuditPage } from './pages/AuditPage';
 import { BalancesPage } from './pages/BalancesPage';
 import { DashboardPage } from './pages/DashboardPage';
+import { PlatformFeesPage } from './pages/PlatformFeesPage';
 import { DrivesPage } from './pages/DrivesPage';
 import { LoginPage } from './pages/LoginPage';
 import { SecurityPage } from './pages/SecurityPage';
@@ -49,6 +50,7 @@ export function App() {
               <Route path="drives" element={<DrivesPage />} />
               <Route path="applications" element={<ApplicationsPage />} />
               <Route path="balances" element={<BalancesPage />} />
+              <Route path="platform-fees" element={<PlatformFeesPage />} />
               <Route path="analytics" element={<AnalyticsPage />} />
               <Route path="security" element={<SecurityPage />} />
               <Route path="audit" element={<AuditPage />} />

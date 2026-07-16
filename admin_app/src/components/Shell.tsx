@@ -8,6 +8,7 @@ const links = [
   ['/drives', 'Drives'],
   ['/applications', 'Applications'],
   ['/balances', 'Balances'],
+  ['/platform-fees', 'Platform fees'],
   ['/analytics', 'Analytics'],
   ['/security', 'Security'],
   ['/audit', 'Audit'],

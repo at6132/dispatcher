@@ -12,6 +12,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { mapApiError } from '../../api/errors';
 import { useAuth } from '../../auth/AuthContext';
+import { markDevicePermissionsComplete } from '../../auth/devicePermissionsStore';
 import {
   buildOnboardingProfile,
   validateOnboardingExperience,
@@ -166,6 +167,8 @@ export function OnboardingScreen() {
       hasZelle: Boolean(profile.zelle?.trim()),
     });
     try {
+      // Same install already did location + notifications — don’t re-prompt.
+      await markDevicePermissionsComplete();
       // Auth seals onboardingComplete optimistically — Root will leave this
       // screen. Don’t clear submitting / show errors after unmount.
       await completeOnboarding(profile);

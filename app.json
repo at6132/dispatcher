@@ -11,8 +11,10 @@
       "infoPlist": {
         "UIBackgroundModes": [
           "location"
-        ]
-      }
+        ],
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "bundleIdentifier": "com.avitaub.dispatcher"
     },
     "android": {
       "adaptiveIcon": {
@@ -66,6 +68,11 @@
         }
       ],
       "expo-secure-store"
-    ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "94f17225-3da2-4771-a86c-546b875093e2"
+      }
+    }
   }
 }

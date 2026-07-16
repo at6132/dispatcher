@@ -31,6 +31,7 @@ import {
 } from './routes/drives.js';
 import { favoriteRoutes } from './routes/favorites.js';
 import { meRoutes } from './routes/me.js';
+import { platformFeeRoutes } from './routes/platformFees.js';
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -162,7 +163,7 @@ export async function buildApp() {
 
     const allowedOrigins = (process.env.CORS_ORIGINS ?? '')
       .split(',')
-      .map((s) => s.trim())
+      .map((s: string) => s.trim())
       .filter(Boolean);
     await app.register(cors, {
       origin: allowedOrigins.length
@@ -215,6 +216,7 @@ export async function buildApp() {
   await app.register(meRoutes, { prefix: '/v1/me' });
   await app.register(driveRoutes, { prefix: '/v1/drives' });
   await app.register(balanceRoutes, { prefix: '/v1/balances' });
+  await app.register(platformFeeRoutes, { prefix: '/v1/platform-fees' });
   await app.register(profileRoutes, { prefix: '/v1/profiles' });
   await app.register(favoriteRoutes, { prefix: '/v1/favorites' });
   await app.register(adminRoutes, { prefix: '/v1/admin' });

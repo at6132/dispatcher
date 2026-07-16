@@ -61,10 +61,15 @@ Completed jobs appear on the driver’s profile. All completed jobs are visible 
 
 ## Money (no in-app payments)
 
-- On complete: store cost; create **10% balance owed to the poster by the completing driver**
+- On complete: store cost; create **12% balance owed to the poster by the completing driver**
+- Also create a **2% platform fee** owed by the poster (dispatcher) to the platform
+- Net for dispatcher after remitting: **10%** of trip cost
 - Driver pays poster **outside the app** (Zelle, Venmo, cash, etc.)
-- Poster marks **Got paid / settled** in-app (optional Zelle / bank confirmation screenshot)
-- If not settled by **Sunday 11:59pm** → **completing driver’s account locked** until cleared
+- Driver marks **Paid** in-app (optional Zelle / bank confirmation screenshot)
+- Balance stays **payment pending** until the poster marks **Received**
+- Poster confirmation closes the driver balance as **settled**
+- Poster marks **Sent** on platform fees (optional screenshot) → **payment pending** until admin marks **Received**
+- If not settled by **Sunday 11:59pm** → account locked until cleared (drivers for unpaid 12%; dispatchers for unpaid 2%)
 
 ## Privacy
 

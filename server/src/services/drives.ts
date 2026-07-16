@@ -6,15 +6,22 @@ import {
   balances,
   driverProfiles,
   drives,
+  platformFees,
   users,
 } from '../db/schema.js';
+import {
+  driverCommissionCents,
+  platformFeeCents,
+} from '../lib/commission.js';
 import { AppError } from '../lib/errors.js';
 import { isUniqueViolation, withLock } from '../lib/locks.js';
 import { isValidPhone, nextSundayDeadlineNy, normalizePhone } from '../lib/phone.js';
 import { getRedis } from '../lib/redis.js';
+import { presignGet } from '../lib/s3.js';
 import { toAuthUser, toPublicProfile } from './auth.js';
 import { listFavoriteUserIds } from './favorites.js';
 import { assertOwnedConfirmedPhotoKey } from './onboarding.js';
+import { listPlatformFeesForPoster } from './platformFees.js';
 import {
   notifyApplicationAccepted,
   notifyApplicationsCleared,
@@ -1447,7 +1454,8 @@ export async function completeDrive(
         throw new AppError(409, 'No assignee', 'no_assignee');
       }
 
-      const amountCents = Math.round(input.costCents * 0.1);
+      const amountCents = driverCommissionCents(input.costCents);
+      const feeCents = platformFeeCents(input.costCents);
       const dueSunday = nextSundayDeadlineNy();
 
       const [updated] = await tx
@@ -1484,6 +1492,15 @@ export async function completeDrive(
           })
           .returning();
         if (!balance) throw new AppError(500, 'Balance create failed', 'balance_failed');
+
+        await tx.insert(platformFees).values({
+          driveId,
+          balanceId: balance.id,
+          posterId: drive.posterId,
+          amountCents: feeCents,
+          dueSunday,
+        });
+
         return { drive: mapDrive(updated, actorId), balanceId: balance.id };
       } catch (err) {
         if (isUniqueViolation(err)) {
@@ -1531,18 +1548,61 @@ export async function hideDrive(posterId: string, driveId: string): Promise<Driv
   return mapDrive(drive, posterId);
 }
 
-export async function settleBalance(
-  posterId: string,
+export async function markBalancePaid(
+  driverId: string,
   balanceId: string,
   settlementProofKey?: string,
-) {
+): Promise<typeof balances.$inferSelect> {
   const proofKey = await assertOwnedConfirmedPhotoKey(
-    posterId,
+    driverId,
     settlementProofKey,
     'payment_proof',
   );
 
-  return withLock(`balance:${balanceId}:settle`, async () =>
+  return withLock(`balance:${balanceId}:mark-paid`, async () =>
+    db.transaction(async (tx) => {
+      const [balance] = await tx
+        .select()
+        .from(balances)
+        .where(eq(balances.id, balanceId))
+        .for('update');
+      if (!balance) throw new AppError(404, 'Balance not found', 'balance_not_found');
+      if (balance.driverId !== driverId) {
+        throw new AppError(403, 'Only the driver can mark paid', 'forbidden');
+      }
+      if (balance.status !== 'open') {
+        return balance;
+      }
+
+      const [updated] = await tx
+        .update(balances)
+        .set({
+          status: 'payment_pending',
+          paidAt: new Date(),
+          ...(proofKey ? { settlementProofKey: proofKey } : {}),
+        })
+        .where(and(eq(balances.id, balanceId), eq(balances.status, 'open')))
+        .returning();
+      if (!updated) {
+        // Lost race — re-read the row after the other request advances it.
+        const [again] = await tx
+          .select()
+          .from(balances)
+          .where(eq(balances.id, balanceId))
+          .limit(1);
+        if (again && again.status !== 'open') return again;
+        throw new AppError(409, 'Payment could not be marked', 'payment_conflict');
+      }
+      return updated;
+    }),
+  );
+}
+
+export async function confirmBalanceReceived(
+  posterId: string,
+  balanceId: string,
+) {
+  return withLock(`balance:${balanceId}:confirm-received`, async () =>
     db.transaction(async (tx) => {
       const [balance] = await tx
         .select()
@@ -1551,10 +1611,15 @@ export async function settleBalance(
         .for('update');
       if (!balance) throw new AppError(404, 'Balance not found', 'balance_not_found');
       if (balance.posterId !== posterId) {
-        throw new AppError(403, 'Only the poster can settle', 'forbidden');
+        throw new AppError(403, 'Only the poster can confirm receipt', 'forbidden');
       }
-      if (balance.status === 'settled') {
-        return balance;
+      if (balance.status === 'settled') return balance;
+      if (balance.status !== 'payment_pending') {
+        throw new AppError(
+          409,
+          'The driver has not marked this payment paid yet',
+          'payment_not_marked',
+        );
       }
 
       const [updated] = await tx
@@ -1562,33 +1627,46 @@ export async function settleBalance(
         .set({
           status: 'settled',
           settledAt: new Date(),
-          ...(proofKey ? { settlementProofKey: proofKey } : {}),
         })
-        .where(and(eq(balances.id, balanceId), eq(balances.status, 'open')))
+        .where(
+          and(
+            eq(balances.id, balanceId),
+            eq(balances.status, 'payment_pending'),
+          ),
+        )
         .returning();
       if (!updated) {
-        // Lost race — re-read settled row
         const [again] = await tx
           .select()
           .from(balances)
           .where(eq(balances.id, balanceId))
           .limit(1);
         if (again?.status === 'settled') return again;
-        throw new AppError(409, 'Balance could not be settled', 'settle_conflict');
+        throw new AppError(409, 'Receipt could not be confirmed', 'settle_conflict');
       }
 
-      // Unlock driver only if no open past-due balances remain
+      // Unlock only after every past-due driver balance and platform fee is clear.
       const pastDue = await tx
         .select({ c: sql<number>`count(*)::int` })
         .from(balances)
         .where(
           and(
             eq(balances.driverId, balance.driverId),
-            eq(balances.status, 'open'),
+            ne(balances.status, 'settled'),
             sql`${balances.dueSunday} < now()`,
           ),
         );
-      if ((pastDue[0]?.c ?? 0) === 0) {
+      const feePastDue = await tx
+        .select({ c: sql<number>`count(*)::int` })
+        .from(platformFees)
+        .where(
+          and(
+            eq(platformFees.posterId, balance.driverId),
+            ne(platformFees.status, 'settled'),
+            sql`${platformFees.dueSunday} < now()`,
+          ),
+        );
+      if ((pastDue[0]?.c ?? 0) === 0 && (feePastDue[0]?.c ?? 0) === 0) {
         await tx
           .update(users)
           .set({ status: 'active', updatedAt: new Date() })
@@ -1637,16 +1715,29 @@ export async function listBalances(userId: string) {
     ]),
   );
 
-  // Lifetime 10% earned as poster — includes settled (does not drop after Got paid).
-  const [profitRow] = await db
+  // Settled 12% from drivers minus settled 2% remitted to platform.
+  const [grossRow] = await db
     .select({
-      totalProfitCents: sql<number>`coalesce(sum(${balances.amountCents}), 0)::int`,
+      cents: sql<number>`coalesce(sum(${balances.amountCents}), 0)::int`,
     })
     .from(balances)
-    .where(eq(balances.posterId, userId));
+    .where(
+      and(eq(balances.posterId, userId), eq(balances.status, 'settled')),
+    );
+  const [feePaidRow] = await db
+    .select({
+      cents: sql<number>`coalesce(sum(${platformFees.amountCents}), 0)::int`,
+    })
+    .from(platformFees)
+    .where(
+      and(
+        eq(platformFees.posterId, userId),
+        eq(platformFees.status, 'settled'),
+      ),
+    );
 
-  return {
-    items: rows.map((b) => {
+  const items = await Promise.all(
+    rows.map(async (b) => {
       const poster = parties.get(b.posterId) ?? {
         id: b.posterId,
         name: 'Driver',
@@ -1665,8 +1756,12 @@ export async function listBalances(userId: string) {
         amountCents: b.amountCents,
         status: b.status,
         dueSunday: b.dueSunday.toISOString(),
+        paidAt: b.paidAt?.toISOString(),
         settledAt: b.settledAt?.toISOString(),
         createdAt: b.createdAt.toISOString(),
+        settlementProofUrl: b.settlementProofKey
+          ? await presignGet(b.settlementProofKey).catch(() => undefined)
+          : undefined,
         poster: {
           id: poster.id,
           name: poster.name,
@@ -1682,6 +1777,17 @@ export async function listBalances(userId: string) {
         },
       };
     }),
-    totalProfitCents: profitRow?.totalProfitCents ?? 0,
+  );
+
+  const platformFeeItems = await listPlatformFeesForPoster(userId);
+  const owedToUsCents = platformFeeItems
+    .filter((f) => f.status !== 'settled')
+    .reduce((sum, f) => sum + f.amountCents, 0);
+
+  return {
+    items,
+    platformFees: platformFeeItems,
+    owedToUsCents,
+    totalProfitCents: (grossRow?.cents ?? 0) - (feePaidRow?.cents ?? 0),
   };
 }

@@ -240,3 +240,11 @@ export async function clearSession(): Promise<void> {
     logger.info('session', 'logout.done');
   }
 }
+
+/** Permanently delete the signed-in account on the server, then clear tokens. */
+export async function deleteAccountSession(): Promise<void> {
+  logger.info('session', 'delete_account.start');
+  await apiFetch('/v1/me', { method: 'DELETE' });
+  await clearTokens();
+  logger.info('session', 'delete_account.done');
+}

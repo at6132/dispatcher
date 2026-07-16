@@ -15,6 +15,7 @@ import {
   applyToDrive,
   clearApplications,
   completeDrive,
+  confirmBalanceReceived,
   createDrive,
   declineDirectInvite,
   getDrive,
@@ -22,10 +23,10 @@ import {
   listApplications,
   listBalances,
   listDrives,
+  markBalancePaid,
   markDrivePickedUp,
   requestDriveCancel,
   respondDriveCancel,
-  settleBalance,
   unassignDrive,
   updateDrive,
 } from '../services/drives.js';
@@ -717,8 +718,8 @@ export const balanceRoutes: FastifyPluginAsync = async (app) => {
         windowSec: 60,
       });
       const user = requireUser(request);
-      const { items, totalProfitCents } = await listBalances(user.id);
-      return reply.send({ items, totalProfitCents });
+      const result = await listBalances(user.id);
+      return reply.send(result);
     } catch (err) {
       if (err instanceof AppError) {
         return sendError(reply, err.statusCode, err.message, err.code);
@@ -727,7 +728,7 @@ export const balanceRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
-  app.post('/:id/settle', async (request, reply) => {
+  app.post('/:id/mark-paid', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
     if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
     const body = z
@@ -740,20 +741,23 @@ export const balanceRoutes: FastifyPluginAsync = async (app) => {
     }
     try {
       await assertClientLimits(request, reply, {
-        name: 'balance_settle',
+        name: 'balance_mark_paid',
         ipLimit: 40,
         userLimit: 30,
         windowSec: 3600,
         failClosed: true,
       });
       const user = requireUser(request);
-      const balance = await settleBalance(
+      const balance = await markBalancePaid(
         user.id,
         params.data.id,
         body.data.settlementProofKey,
       );
+      if (!balance) {
+        return sendError(reply, 409, 'Payment could not be marked', 'payment_conflict');
+      }
       trackEvent({
-        name: 'balance.settle',
+        name: 'balance.mark_paid',
         userId: user.id,
         requestId: request.id,
         ip: request.ip,
@@ -766,6 +770,43 @@ export const balanceRoutes: FastifyPluginAsync = async (app) => {
         balance: {
           id: balance.id,
           status: balance.status,
+          paidAt: balance.paidAt?.toISOString() ?? null,
+          settledAt: balance.settledAt?.toISOString() ?? null,
+        },
+      });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.post('/:id/confirm-received', async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
+    try {
+      await assertClientLimits(request, reply, {
+        name: 'balance_confirm_received',
+        ipLimit: 40,
+        userLimit: 30,
+        windowSec: 3600,
+        failClosed: true,
+      });
+      const user = requireUser(request);
+      const balance = await confirmBalanceReceived(user.id, params.data.id);
+      trackEvent({
+        name: 'balance.confirm_received',
+        userId: user.id,
+        requestId: request.id,
+        ip: request.ip,
+        props: { balanceId: params.data.id },
+      });
+      return reply.send({
+        balance: {
+          id: balance.id,
+          status: balance.status,
+          paidAt: balance.paidAt?.toISOString(),
           settledAt: balance.settledAt?.toISOString(),
         },
       });

@@ -16,6 +16,7 @@ import {
   authenticateAccount,
   clearSession,
   createAccount,
+  deleteAccountSession,
   getSessionUser,
   saveOnboarding,
   savePresence,
@@ -55,6 +56,7 @@ type AuthContextValue = {
     lng?: number;
   }) => Promise<void>;
   signOut: () => Promise<void>;
+  deleteAccount: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -380,6 +382,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     logger.info('auth', 'signed_out');
   }, []);
 
+  const deleteAccount = useCallback(async () => {
+    sessionGen.current += 1;
+    await deleteAccountSession();
+    await clearPersistedUser();
+    await clearPendingOnboarding();
+    setUser(null);
+    userRef.current = null;
+    setStatus('unauthenticated');
+    logger.info('auth', 'account_deleted');
+  }, []);
+
   const value = useMemo(
     () => ({
       status,
@@ -390,6 +403,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       updateProfile,
       updatePresence,
       signOut,
+      deleteAccount,
     }),
     [
       status,
@@ -400,6 +414,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       updateProfile,
       updatePresence,
       signOut,
+      deleteAccount,
     ],
   );
 

@@ -12,7 +12,11 @@ import {
   View,
 } from 'react-native';
 
-import { settleBalance } from '../../api/balances';
+import {
+  confirmBalanceReceived,
+  markBalancePaid,
+  markPlatformFeePaid,
+} from '../../api/balances';
 import { mapApiError } from '../../api/errors';
 import { uploadPaymentProof } from '../../api/photos';
 import { colors, fonts, motion, radius, space, type } from '../../theme';
@@ -25,6 +29,8 @@ export type SettlePaidTarget = {
   amountLabel: string;
   tripLabel: string;
   balanceIds: string[];
+  action: 'markPaid' | 'confirmReceived';
+  kind?: 'balance' | 'platformFee';
 };
 
 type Props = {
@@ -82,7 +88,7 @@ export function SettlePaidModal({
     Keyboard.dismiss();
     try {
       let settlementProofKey: string | undefined;
-      if (proofUri) {
+      if (target.action === 'markPaid' && proofUri) {
         try {
           settlementProofKey = await uploadPaymentProof(proofUri);
         } catch {
@@ -92,8 +98,17 @@ export function SettlePaidModal({
         }
       }
 
+      const kind = target.kind ?? 'balance';
       for (const id of target.balanceIds) {
-        await settleBalance(id, { settlementProofKey });
+        if (target.action === 'markPaid') {
+          if (kind === 'platformFee') {
+            await markPlatformFeePaid(id, { settlementProofKey });
+          } else {
+            await markBalancePaid(id, { settlementProofKey });
+          }
+        } else {
+          await confirmBalanceReceived(id);
+        }
       }
       onSettled();
     } catch (err) {
@@ -101,6 +116,9 @@ export function SettlePaidModal({
       setSubmitting(false);
     }
   };
+
+  const isPlatform = target?.kind === 'platformFee';
+  const markPaidLabel = isPlatform ? 'Mark sent' : 'Mark paid';
 
   return (
     <Modal
@@ -138,27 +156,42 @@ export function SettlePaidModal({
                 showsVerticalScrollIndicator={false}
                 contentContainerStyle={styles.scrollInner}
               >
-                <Text style={styles.eyebrow}>Mark settled</Text>
+                <Text style={styles.eyebrow}>
+                  {target?.action === 'markPaid'
+                    ? markPaidLabel
+                    : 'Confirm payment'}
+                </Text>
                 <Text style={styles.title} numberOfLines={2}>
-                  {target?.name ?? 'Driver'}
+                  {target?.name ??
+                    (isPlatform
+                      ? 'Platform'
+                      : target?.action === 'markPaid'
+                        ? 'Dispatcher'
+                        : 'Driver')}
                 </Text>
                 <Text style={styles.support}>
                   {target
-                    ? `${target.amountLabel} · ${target.tripLabel}. Optional: add a Zelle or bank confirmation screenshot.`
+                    ? target.action === 'markPaid'
+                      ? isPlatform
+                        ? `${target.amountLabel} · ${target.tripLabel}. Send the 2% platform fee off-app, then mark sent. Optional screenshot.`
+                        : `${target.amountLabel} · ${target.tripLabel}. Optional: add a Zelle or bank confirmation screenshot.`
+                      : `${target.amountLabel} · ${target.tripLabel}. Confirm only after the payment reaches you.`
                     : null}
                 </Text>
 
-                <PhotoPickerField
-                  label="Confirmation"
-                  hint="Zelle or bank receipt"
-                  uri={proofUri}
-                  onChange={(uri) => {
-                    setProofUri(uri);
-                    if (error) setError(null);
-                  }}
-                  variant="rect"
-                  compact
-                />
+                {target?.action === 'markPaid' ? (
+                  <PhotoPickerField
+                    label="Confirmation"
+                    hint="Zelle or bank receipt"
+                    uri={proofUri}
+                    onChange={(uri) => {
+                      setProofUri(uri);
+                      if (error) setError(null);
+                    }}
+                    variant="rect"
+                    compact
+                  />
+                ) : null}
 
                 {error ? <Text style={styles.error}>{error}</Text> : null}
 
@@ -168,7 +201,9 @@ export function SettlePaidModal({
                     disabled={submitting}
                     onPress={() => void onSubmit()}
                   >
-                    Mark settled
+                    {target?.action === 'markPaid'
+                      ? markPaidLabel
+                      : 'Mark received'}
                   </Button>
                   <Button
                     variant="ghost"

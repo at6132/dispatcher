@@ -1,5 +1,16 @@
 import type { FastifyPluginAsync } from 'fastify';
-import { and, count, desc, eq, gte, ilike, isNull, or, sql } from 'drizzle-orm';
+import {
+  and,
+  count,
+  desc,
+  eq,
+  gte,
+  ilike,
+  isNull,
+  ne,
+  or,
+  sql,
+} from 'drizzle-orm';
 import { z } from 'zod';
 
 import { db } from '../../db/client.js';
@@ -11,13 +22,18 @@ import {
   balances,
   driverProfiles,
   drives,
+  platformFees,
   refreshTokens,
   securityEvents,
   users,
 } from '../../db/schema.js';
 import { writeAudit } from '../../lib/audit.js';
+import {
+  confirmPlatformFeeReceived,
+  listPlatformFeesAdmin,
+} from '../../services/platformFees.js';
 import { hashPassword } from '../../lib/crypto.js';
-import { sendError } from '../../lib/errors.js';
+import { AppError, sendError } from '../../lib/errors.js';
 import {
   requireAdmin,
   requireAdminSession,
@@ -74,13 +90,13 @@ export const adminOpsRoutes: FastifyPluginAsync = async (app) => {
           cents: sql<number>`coalesce(sum(${balances.amountCents}), 0)`,
         })
         .from(balances)
-        .where(eq(balances.status, 'open')),
+        .where(ne(balances.status, 'settled')),
       db
         .select({ n: count() })
         .from(balances)
         .where(
           and(
-            eq(balances.status, 'open'),
+            ne(balances.status, 'settled'),
             sql`${balances.dueSunday} < now()`,
           ),
         ),
@@ -663,7 +679,7 @@ export const adminOpsRoutes: FastifyPluginAsync = async (app) => {
   app.get('/balances', async (request, reply) => {
     const q = z
       .object({
-        status: z.enum(['open', 'settled']).optional(),
+        status: z.enum(['open', 'payment_pending', 'settled']).optional(),
         overdue: z.enum(['1', 'true']).optional(),
         limit: z.coerce.number().optional(),
         offset: z.coerce.number().optional(),
@@ -677,7 +693,7 @@ export const adminOpsRoutes: FastifyPluginAsync = async (app) => {
     if (q.data.status) filters.push(eq(balances.status, q.data.status));
     if (q.data.overdue) {
       filters.push(
-        and(eq(balances.status, 'open'), sql`${balances.dueSunday} < now()`)!,
+        and(ne(balances.status, 'settled'), sql`${balances.dueSunday} < now()`)!,
       );
     }
     const where = filters.length ? and(...filters) : undefined;
@@ -767,6 +783,64 @@ export const adminOpsRoutes: FastifyPluginAsync = async (app) => {
     });
 
     return reply.send({ balance: after });
+  });
+
+  // ---- Platform fees (dispatcher → us) ----
+  app.get('/platform-fees', async (request, reply) => {
+    const q = z
+      .object({
+        status: z.enum(['open', 'payment_pending', 'settled']).optional(),
+        overdue: z.enum(['1', 'true']).optional(),
+        limit: z.coerce.number().optional(),
+        offset: z.coerce.number().optional(),
+      })
+      .safeParse(request.query);
+    if (!q.success) return sendError(reply, 400, 'Invalid query', 'invalid_body');
+
+    const limit = parseLimit(q.data.limit);
+    const offset = Math.max(0, Number(q.data.offset ?? 0));
+    const items = await listPlatformFeesAdmin({
+      status: q.data.status,
+      overdue: Boolean(q.data.overdue),
+      limit,
+      offset,
+    });
+    return reply.send({ items, limit, offset });
+  });
+
+  app.post('/platform-fees/:id/confirm-received', async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_body');
+
+    const [before] = await db
+      .select()
+      .from(platformFees)
+      .where(eq(platformFees.id, params.data.id))
+      .limit(1);
+    if (!before) return sendError(reply, 404, 'Platform fee not found', 'not_found');
+
+    try {
+      const after = await confirmPlatformFeeReceived(params.data.id);
+      const session = requireAdminSession(request);
+      writeAudit({
+        actorType: 'admin',
+        actorId: session.id,
+        sessionId: session.id,
+        action: 'admin.platform_fees.confirm_received',
+        entityType: 'platform_fee',
+        entityId: params.data.id,
+        requestId: request.id,
+        ip: request.ip,
+        before,
+        after,
+      });
+      return reply.send({ platformFee: after });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
   });
 
   // ---- Analytics ----

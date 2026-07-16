@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
 import {
+  Alert,
   Image,
   Keyboard,
   KeyboardAvoidingView,
@@ -93,9 +94,10 @@ function formatWhen(iso: string): string {
 
 export function ProfileScreen() {
   const insets = useSafeAreaInsets();
-  const { user, updateProfile } = useAuth();
+  const { user, updateProfile, signOut, deleteAccount } = useAuth();
   const [editing, setEditing] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [accountBusy, setAccountBusy] = useState(false);
 
   const [name, setName] = useState('');
   const [vehicleClass, setVehicleClass] = useState<VehicleClass | null>(null);
@@ -216,6 +218,67 @@ export function ProfileScreen() {
 
   const closeSettings = () => {
     setSettingsOpen(false);
+  };
+
+  const onSignOut = () => {
+    Alert.alert('Sign out?', 'You’ll need your phone and password to sign back in.', [
+      { text: 'Cancel', style: 'cancel' },
+      {
+        text: 'Sign out',
+        style: 'destructive',
+        onPress: () => {
+          void (async () => {
+            setAccountBusy(true);
+            setNotifError(null);
+            try {
+              await signOut();
+            } catch (err) {
+              setNotifError(mapApiError(err).message);
+              setAccountBusy(false);
+            }
+          })();
+        },
+      },
+    ]);
+  };
+
+  const onDeleteAccount = () => {
+    Alert.alert(
+      'Delete account?',
+      'This permanently removes your profile, posts, and applications. Open balances must be settled first. This can’t be undone.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete account',
+          style: 'destructive',
+          onPress: () => {
+            Alert.alert(
+              'Are you sure?',
+              'Your account and data will be deleted immediately.',
+              [
+                { text: 'Keep account', style: 'cancel' },
+                {
+                  text: 'Delete forever',
+                  style: 'destructive',
+                  onPress: () => {
+                    void (async () => {
+                      setAccountBusy(true);
+                      setNotifError(null);
+                      try {
+                        await deleteAccount();
+                      } catch (err) {
+                        setNotifError(mapApiError(err).message);
+                        setAccountBusy(false);
+                      }
+                    })();
+                  },
+                },
+              ],
+            );
+          },
+        },
+      ],
+    );
   };
 
   const patchNotifPref = async <K extends keyof NotificationPrefs>(
@@ -380,10 +443,10 @@ export function ProfileScreen() {
                     adjustsFontSizeToFit
                     minimumFontScale={0.8}
                   >
-                    Notification <Text style={styles.trail}>settings</Text>
+                    Your <Text style={styles.trail}>settings</Text>
                   </Text>
                   <Text style={styles.support}>
-                    Choose which push notifications you want.
+                    Notifications, sign out, and account.
                   </Text>
 
                   <View style={styles.settingsSection}>
@@ -476,6 +539,37 @@ export function ProfileScreen() {
                     {notifSaving ? (
                       <LoadingHint label="Saving…" variant="inline" />
                     ) : null}
+                  </View>
+
+                  <View style={styles.settingsDivider} />
+
+                  <View style={styles.settingsSection}>
+                    <Text style={styles.settingsSectionTitle}>Account</Text>
+                    <Text style={styles.notifHint}>
+                      Sign out keeps your account. Delete removes it for good.
+                    </Text>
+                    <Button
+                      variant="ghost"
+                      onPress={onSignOut}
+                      disabled={accountBusy}
+                      accessibilityLabel="Sign out"
+                    >
+                      Sign out
+                    </Button>
+                    <Pressable
+                      accessibilityRole="button"
+                      accessibilityLabel="Delete account"
+                      disabled={accountBusy}
+                      onPress={onDeleteAccount}
+                      style={({ pressed }) => [
+                        styles.deleteAccountBtn,
+                        (pressed || accountBusy) && styles.deleteAccountPressed,
+                      ]}
+                    >
+                      <Text style={styles.deleteAccountLabel}>
+                        {accountBusy ? 'Working…' : 'Delete account'}
+                      </Text>
+                    </Pressable>
                     {notifError ? (
                       <Text style={styles.formError}>{notifError}</Text>
                     ) : null}
@@ -843,6 +937,21 @@ const styles = StyleSheet.create({
     height: StyleSheet.hairlineWidth,
     backgroundColor: colors.hairline,
     marginVertical: space.md,
+  },
+  deleteAccountBtn: {
+    minHeight: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: space.md,
+  },
+  deleteAccountPressed: {
+    opacity: 0.7,
+  },
+  deleteAccountLabel: {
+    fontFamily: fonts.sansSemi,
+    fontSize: 15,
+    letterSpacing: -0.1,
+    color: colors.danger,
   },
   notifStack: {
     gap: space.lg,

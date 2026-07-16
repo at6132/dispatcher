@@ -19,6 +19,7 @@ import {
   getNotificationPrefs,
   updateNotificationPrefs,
 } from '../services/notificationPrefs.js';
+import { deleteAccount } from '../services/account.js';
 import {
   deletePushToken,
   upsertPushToken,
@@ -390,6 +391,36 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
     try {
       const user = requireUser(request);
       await deletePushToken(user.id, body.data.token);
+      return reply.status(204).send();
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.delete('/', async (request, reply) => {
+    try {
+      await assertClientLimits(request, reply, {
+        name: 'me_delete',
+        ipLimit: 10,
+        userLimit: 5,
+        windowSec: 3600,
+        failClosed: true,
+      });
+      const user = requireUser(request);
+      trackEvent({
+        name: 'account_deleted',
+        userId: user.id,
+        requestId: request.id,
+        ip: request.ip,
+      });
+      await deleteAccount(user.id);
+      logDomain(request.log, 'me.delete.ok', {
+        requestId: request.id,
+        userId: shortId(user.id),
+      });
       return reply.status(204).send();
     } catch (err) {
       if (err instanceof AppError) {

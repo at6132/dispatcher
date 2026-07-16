@@ -1,5 +1,5 @@
 ---
-description: Dispatcher product purpose — shared drive board, offline-first, privacy, 10% balances
+description: Dispatcher product purpose — shared drive board, offline-first, privacy, 12%/2% balances
 alwaysApply: true
 ---
 
@@ -9,7 +9,7 @@ Full brief: `docs/PRODUCT.md`. Short rules for every change:
 
 ## What this is
 
-WhatsApp replacement drive board for ~500–600 drivers. Anyone posts free-text routes (e.g. `Monticello → Brooklyn`); others apply; poster accepts one; passenger phone unlocks only then. Complete → cost + 10% balance to poster (pay outside app); Sunday lock if unsettled. One shared board.
+WhatsApp replacement drive board for ~500–600 drivers. Anyone posts free-text routes (e.g. `Monticello → Brooklyn`); others apply; poster accepts one; passenger phone unlocks only then. Complete → cost + 12% balance to poster (pay outside app; poster remits 2% to platform, keeps 10%); Sunday lock if unsettled. One shared board.
 
 ## Non-negotiables
 

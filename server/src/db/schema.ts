@@ -34,7 +34,11 @@ export const applicationStatusEnum = pgEnum('application_status', [
   'rejected',
   'cleared',
 ]);
-export const balanceStatusEnum = pgEnum('balance_status', ['open', 'settled']);
+export const balanceStatusEnum = pgEnum('balance_status', [
+  'open',
+  'payment_pending',
+  'settled',
+]);
 export const photoKindEnum = pgEnum('photo_kind', [
   'self',
   'interior',
@@ -297,6 +301,7 @@ export const balances = pgTable(
     amountCents: integer('amount_cents').notNull(),
     status: balanceStatusEnum('status').notNull().default('open'),
     dueSunday: timestamp('due_sunday', { withTimezone: true }).notNull(),
+    paidAt: timestamp('paid_at', { withTimezone: true }),
     settledAt: timestamp('settled_at', { withTimezone: true }),
     /** Optional Zelle / bank confirmation screenshot object key. */
     settlementProofKey: text('settlement_proof_key'),
@@ -308,6 +313,36 @@ export const balances = pgTable(
     uniqueIndex('balances_drive_uidx').on(t.driveId),
     index('balances_driver_status_idx').on(t.driverId, t.status),
     index('balances_poster_status_idx').on(t.posterId, t.status),
+  ],
+);
+
+export const platformFees = pgTable(
+  'platform_fees',
+  {
+    id: uuid('id').defaultRandom().primaryKey(),
+    driveId: uuid('drive_id')
+      .notNull()
+      .references(() => drives.id, { onDelete: 'restrict' }),
+    balanceId: uuid('balance_id').references(() => balances.id, {
+      onDelete: 'set null',
+    }),
+    posterId: uuid('poster_id')
+      .notNull()
+      .references(() => users.id, { onDelete: 'restrict' }),
+    /** 2% of trip cost owed by the dispatcher to the platform. */
+    amountCents: integer('amount_cents').notNull(),
+    status: balanceStatusEnum('status').notNull().default('open'),
+    dueSunday: timestamp('due_sunday', { withTimezone: true }).notNull(),
+    paidAt: timestamp('paid_at', { withTimezone: true }),
+    settledAt: timestamp('settled_at', { withTimezone: true }),
+    settlementProofKey: text('settlement_proof_key'),
+    createdAt: timestamp('created_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+  },
+  (t) => [
+    uniqueIndex('platform_fees_drive_uidx').on(t.driveId),
+    index('platform_fees_poster_status_idx').on(t.posterId, t.status),
   ],
 );
 

@@ -56,7 +56,9 @@ export function BalancesPage() {
   return (
     <div>
       <h1 className="page-title">Balances</h1>
-      <p className="page-sub">10% off-app settlement ledger.</p>
+      <p className="page-sub">
+        Driver → dispatcher 12% settlement ledger.
+      </p>
 
       <div className="toolbar">
         <select
@@ -66,6 +68,7 @@ export function BalancesPage() {
         >
           <option value="">All</option>
           <option value="open">Open</option>
+          <option value="payment_pending">Payment pending</option>
           <option value="settled">Settled</option>
         </select>
         <label className="muted" style={{ display: 'flex', gap: 8 }}>
@@ -108,7 +111,7 @@ export function BalancesPage() {
                   <td className="mono">{fmtDate(b.createdAt)}</td>
                   <td>
                     <div className="row-actions">
-                      {b.status === 'open' ? (
+                      {b.status !== 'settled' ? (
                         <button
                           type="button"
                           className="btn btn-primary"

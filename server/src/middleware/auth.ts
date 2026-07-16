@@ -27,7 +27,28 @@ function isAllowedWhileLocked(request: FastifyRequest): boolean {
   const method = request.method.toUpperCase();
 
   if (method === 'GET' && (path === '/v1/me' || path === '/v1/me/')) return true;
+  // Locked users may delete their account (still blocked if balances are open).
+  if (method === 'DELETE' && (path === '/v1/me' || path === '/v1/me/')) {
+    return true;
+  }
   if (method === 'GET' && (path === '/v1/balances' || path === '/v1/balances/')) {
+    return true;
+  }
+  // Balance / platform-fee actions remain available so locked users can clear obligations.
+  if (
+    method === 'POST' &&
+    (/^\/v1\/balances\/[^/]+\/(mark-paid|confirm-received)\/?$/.test(path) ||
+      /^\/v1\/platform-fees\/[^/]+\/mark-paid\/?$/.test(path))
+  ) {
+    return true;
+  }
+  if (
+    method === 'POST' &&
+    (path === '/v1/me/photos/presign' ||
+      path === '/v1/me/photos/presign/' ||
+      path === '/v1/me/photos/confirm' ||
+      path === '/v1/me/photos/confirm/')
+  ) {
     return true;
   }
   return false;

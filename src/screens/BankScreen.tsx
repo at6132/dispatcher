@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
+  Linking,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -13,6 +14,7 @@ import {
   listBalances,
   type Balance,
   type BalanceParty,
+  type PlatformFee,
 } from '../api/balances';
 import { mapApiError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
@@ -34,6 +36,17 @@ type OweGroup = {
   tripCount: number;
   dueSunday: string;
   balanceIds: string[];
+  status: 'open' | 'payment_pending';
+  settlementProofUrl?: string;
+};
+
+type PlatformFeeGroup = {
+  key: string;
+  amountCents: number;
+  tripCount: number;
+  dueSunday: string;
+  feeIds: string[];
+  status: 'open' | 'payment_pending';
 };
 
 function formatUsd(cents: number) {
@@ -62,7 +75,7 @@ function earliestDue(a: string, b: string) {
   return new Date(a).getTime() <= new Date(b).getTime() ? a : b;
 }
 
-function groupOpenBalances(
+function groupUnsettledBalances(
   items: Balance[],
   side: 'youOwe' | 'owedToYou',
   userId: string | undefined,
@@ -72,7 +85,7 @@ function groupOpenBalances(
   const map = new Map<string, OweGroup>();
 
   for (const b of items) {
-    if (b.status !== 'open') continue;
+    if (b.status === 'settled') continue;
 
     if (side === 'youOwe') {
       if (b.driverId !== userId) continue;
@@ -81,20 +94,24 @@ function groupOpenBalances(
         name: 'Dispatcher',
         phone: '',
       };
-      const existing = map.get(party.id);
+      const key = `${party.id}:${b.status}`;
+      const existing = map.get(key);
       if (existing) {
         existing.amountCents += b.amountCents;
         existing.tripCount += 1;
         existing.dueSunday = earliestDue(existing.dueSunday, b.dueSunday);
         existing.balanceIds.push(b.id);
+        existing.settlementProofUrl ??= b.settlementProofUrl;
       } else {
-        map.set(party.id, {
-          key: party.id,
+        map.set(key, {
+          key,
           party,
           amountCents: b.amountCents,
           tripCount: 1,
           dueSunday: b.dueSunday,
           balanceIds: [b.id],
+          status: b.status,
+          settlementProofUrl: b.settlementProofUrl,
         });
       }
       continue;
@@ -106,20 +123,24 @@ function groupOpenBalances(
       name: 'Driver',
       phone: '',
     };
-    const existing = map.get(party.id);
+    const key = `${party.id}:${b.status}`;
+    const existing = map.get(key);
     if (existing) {
       existing.amountCents += b.amountCents;
       existing.tripCount += 1;
       existing.dueSunday = earliestDue(existing.dueSunday, b.dueSunday);
       existing.balanceIds.push(b.id);
+      existing.settlementProofUrl ??= b.settlementProofUrl;
     } else {
-      map.set(party.id, {
-        key: party.id,
+      map.set(key, {
+        key,
         party,
         amountCents: b.amountCents,
         tripCount: 1,
         dueSunday: b.dueSunday,
         balanceIds: [b.id],
+        status: b.status,
+        settlementProofUrl: b.settlementProofUrl,
       });
     }
   }
@@ -127,11 +148,40 @@ function groupOpenBalances(
   return [...map.values()].sort((a, b) => b.amountCents - a.amountCents);
 }
 
+function groupPlatformFees(fees: PlatformFee[]): PlatformFeeGroup[] {
+  const map = new Map<string, PlatformFeeGroup>();
+  for (const f of fees) {
+    if (f.status === 'settled') continue;
+    const existing = map.get(f.status);
+    if (existing) {
+      existing.amountCents += f.amountCents;
+      existing.tripCount += 1;
+      existing.dueSunday = earliestDue(existing.dueSunday, f.dueSunday);
+      existing.feeIds.push(f.id);
+    } else {
+      map.set(f.status, {
+        key: f.status,
+        amountCents: f.amountCents,
+        tripCount: 1,
+        dueSunday: f.dueSunday,
+        feeIds: [f.id],
+        status: f.status,
+      });
+    }
+  }
+  return [...map.values()].sort((a, b) => {
+    if (a.status === b.status) return b.amountCents - a.amountCents;
+    return a.status === 'open' ? -1 : 1;
+  });
+}
+
 export function BankScreen() {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const [items, setItems] = useState<Balance[]>([]);
+  const [platformFees, setPlatformFees] = useState<PlatformFee[]>([]);
   const [totalProfitCents, setTotalProfitCents] = useState(0);
+  const [owedToUsCents, setOwedToUsCents] = useState(0);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -146,7 +196,9 @@ export function BankScreen() {
     try {
       const result = await listBalances();
       setItems(result.items);
+      setPlatformFees(result.platformFees);
       setTotalProfitCents(result.totalProfitCents);
+      setOwedToUsCents(result.owedToUsCents);
     } catch (err) {
       setError(mapApiError(err).message);
     } finally {
@@ -159,8 +211,13 @@ export function BankScreen() {
     void load('initial');
   }, [load]);
 
-  const youOweGroups = groupOpenBalances(items, 'youOwe', user?.id);
-  const owedToYouGroups = groupOpenBalances(items, 'owedToYou', user?.id);
+  const youOweGroups = groupUnsettledBalances(items, 'youOwe', user?.id);
+  const owedToYouGroups = groupUnsettledBalances(
+    items,
+    'owedToYou',
+    user?.id,
+  );
+  const owedToUsGroups = groupPlatformFees(platformFees);
 
   const owedToYouCents = owedToYouGroups.reduce(
     (sum, g) => sum + g.amountCents,
@@ -168,13 +225,30 @@ export function BankScreen() {
   );
   const youOweCents = youOweGroups.reduce((sum, g) => sum + g.amountCents, 0);
 
-  const openSettle = (group: OweGroup) => {
+  const openSettlementAction = (
+    group: OweGroup,
+    action: 'markPaid' | 'confirmReceived',
+  ) => {
     setSettleTarget({
       key: group.key,
       name: group.party.name,
       amountLabel: formatUsd(group.amountCents),
       tripLabel: formatTrips(group.tripCount),
       balanceIds: group.balanceIds,
+      action,
+      kind: 'balance',
+    });
+  };
+
+  const openPlatformFeeAction = (group: PlatformFeeGroup) => {
+    setSettleTarget({
+      key: `platform:${group.key}`,
+      name: 'Platform',
+      amountLabel: formatUsd(group.amountCents),
+      tripLabel: formatTrips(group.tripCount),
+      balanceIds: group.feeIds,
+      action: 'markPaid',
+      kind: 'platformFee',
     });
   };
 
@@ -204,14 +278,13 @@ export function BankScreen() {
           <Text style={styles.titleItalic}>bank</Text>
         </Text>
         <Text style={styles.support}>
-          10% dispatcher commission from completed jobs. Pay outside the app
-          (Zelle, Venmo, cash), then mark settled here.
+          Drivers pay you 12%. Remit 2% to the platform — you keep 10%.
         </Text>
       </View>
 
       {loading && !refreshing ? (
         <LoadingHint label="Loading balances…" variant="block" />
-      ) : error && items.length === 0 ? (
+      ) : error && items.length === 0 && platformFees.length === 0 ? (
         <View style={styles.stateBlock}>
           <Text style={styles.errorText}>{error}</Text>
           <Button variant="ghost" onPress={() => void load('initial')}>
@@ -226,12 +299,12 @@ export function BankScreen() {
               <Text style={styles.balanceEyebrow}>Bank</Text>
             </View>
             <View style={styles.profitBlock}>
-              <Text style={styles.totalLabel}>Total commission earned</Text>
+              <Text style={styles.totalLabel}>Total profit</Text>
               <Text style={styles.balanceAmount}>
                 {formatUsd(totalProfitCents)}
               </Text>
               <Text style={styles.profitHint}>
-                Lifetime 10% — open and settled
+                Settled 12% received minus 2% you’ve paid the platform
               </Text>
             </View>
             <View style={styles.totalsDivider} />
@@ -249,12 +322,64 @@ export function BankScreen() {
                 </Text>
               </View>
             </View>
+            <View style={styles.totalsDivider} />
+            <View style={styles.totalCol}>
+              <Text style={styles.totalLabel}>Owed to us</Text>
+              <Text style={styles.totalOutgoing}>
+                {formatUsd(owedToUsCents)}
+              </Text>
+            </View>
           </GlassSurface>
+
+          <View style={styles.section}>
+            <Text style={styles.sectionLabel}>Owed to us</Text>
+            {owedToUsGroups.length === 0 ? (
+              <Text style={styles.empty}>Nothing outstanding.</Text>
+            ) : (
+              <View style={styles.list}>
+                {owedToUsGroups.map((g) => (
+                  <GlassSurface
+                    key={g.key}
+                    style={styles.rowCard}
+                    contentStyle={styles.rowInner}
+                  >
+                    <View style={styles.rowTop}>
+                      <View style={styles.rowIdentity}>
+                        <Text style={styles.rowName}>Platform fee</Text>
+                        <Text style={styles.rowMeta}>
+                          {formatTrips(g.tripCount)} · {formatDue(g.dueSunday)}
+                        </Text>
+                      </View>
+                      <Text style={[styles.rowAmount, styles.amountOutgoing]}>
+                        {formatUsd(g.amountCents)}
+                      </Text>
+                    </View>
+                    <Text style={styles.rowHint}>
+                      {g.status === 'payment_pending'
+                        ? 'Sent — waiting for confirmation that we received it.'
+                        : '2% of trip cost. Send off-app, then mark sent with an optional screenshot.'}
+                    </Text>
+                    {g.status === 'open' ? (
+                      <Button
+                        variant="primary"
+                        onPress={() => openPlatformFeeAction(g)}
+                        style={styles.settleBtn}
+                      >
+                        Mark sent
+                      </Button>
+                    ) : (
+                      <Text style={styles.pendingLabel}>Pending confirmation</Text>
+                    )}
+                  </GlassSurface>
+                ))}
+              </View>
+            )}
+          </View>
 
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>You owe</Text>
             {youOweGroups.length === 0 ? (
-              <Text style={styles.empty}>Nothing open.</Text>
+              <Text style={styles.empty}>Nothing outstanding.</Text>
             ) : (
               <View style={styles.list}>
                 {youOweGroups.map((g) => (
@@ -283,9 +408,21 @@ export function BankScreen() {
                       <Text style={styles.rowDetail}>Zelle {g.party.zelle}</Text>
                     ) : null}
                     <Text style={styles.rowHint}>
-                      Pay the dispatcher off-app. They mark it settled when they
-                      receive it.
+                      {g.status === 'payment_pending'
+                        ? `Payment pending — waiting for ${g.party.name} to confirm they received it.`
+                        : 'Pay 12% off-app, then mark paid. Optional confirmation screenshot.'}
                     </Text>
+                    {g.status === 'open' ? (
+                      <Button
+                        variant="primary"
+                        onPress={() => openSettlementAction(g, 'markPaid')}
+                        style={styles.settleBtn}
+                      >
+                        Mark paid
+                      </Button>
+                    ) : (
+                      <Text style={styles.pendingLabel}>Pending confirmation</Text>
+                    )}
                   </GlassSurface>
                 ))}
               </View>
@@ -295,7 +432,7 @@ export function BankScreen() {
           <View style={styles.section}>
             <Text style={styles.sectionLabel}>Owed to you</Text>
             {owedToYouGroups.length === 0 ? (
-              <Text style={styles.empty}>Nothing open.</Text>
+              <Text style={styles.empty}>Nothing outstanding.</Text>
             ) : (
               <View style={styles.list}>
                 {owedToYouGroups.map((g) => (
@@ -321,16 +458,36 @@ export function BankScreen() {
                       </Text>
                     ) : null}
                     <Text style={styles.rowHint}>
-                      Your 10% dispatcher commission. Mark settled after you’re
-                      paid off-app.
+                      {g.status === 'payment_pending'
+                        ? `${g.party.name} marked this paid. Confirm after the money reaches you. Remit 2% to the platform from Owed to us.`
+                        : `Waiting for ${g.party.name} to mark the 12% payment paid.`}
                     </Text>
-                    <Button
-                      variant="primary"
-                      onPress={() => openSettle(g)}
-                      style={styles.settleBtn}
-                    >
-                      Mark settled
-                    </Button>
+                    {g.status === 'payment_pending' ? (
+                      <>
+                        {g.settlementProofUrl ? (
+                          <Button
+                            variant="ghost"
+                            onPress={() =>
+                              void Linking.openURL(g.settlementProofUrl!)
+                            }
+                            style={styles.settleBtn}
+                          >
+                            View payment confirmation
+                          </Button>
+                        ) : null}
+                        <Button
+                          variant="primary"
+                          onPress={() =>
+                            openSettlementAction(g, 'confirmReceived')
+                          }
+                          style={styles.settleBtn}
+                        >
+                          Mark received
+                        </Button>
+                      </>
+                    ) : (
+                      <Text style={styles.pendingLabel}>Awaiting payment</Text>
+                    )}
                   </GlassSurface>
                 ))}
               </View>
@@ -441,16 +598,16 @@ const styles = StyleSheet.create({
   },
   totalIncoming: {
     fontFamily: fonts.display,
-    fontSize: 36,
-    letterSpacing: -1,
-    lineHeight: 42,
+    fontSize: 28,
+    letterSpacing: -0.5,
+    lineHeight: 34,
     color: colors.success,
   },
   totalOutgoing: {
     fontFamily: fonts.display,
-    fontSize: 36,
-    letterSpacing: -1,
-    lineHeight: 42,
+    fontSize: 28,
+    letterSpacing: -0.5,
+    lineHeight: 34,
     color: colors.danger,
   },
   amountIncoming: {
@@ -529,5 +686,11 @@ const styles = StyleSheet.create({
   },
   settleBtn: {
     marginTop: space.xs,
+  },
+  pendingLabel: {
+    ...type.label,
+    color: colors.accent,
+    marginTop: space.xs,
+    textTransform: 'uppercase',
   },
 });

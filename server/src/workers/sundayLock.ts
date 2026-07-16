@@ -1,8 +1,8 @@
 import type { FastifyBaseLogger } from 'fastify';
-import { and, eq, sql } from 'drizzle-orm';
+import { and, eq, ne, sql } from 'drizzle-orm';
 
 import { db } from '../db/client.js';
-import { balances, users } from '../db/schema.js';
+import { balances, platformFees, users } from '../db/schema.js';
 import { getRedis } from '../lib/redis.js';
 import { notifyTelegram } from '../lib/telegram.js';
 
@@ -13,20 +13,38 @@ export async function runSundayLockPass(): Promise<number> {
   const got = await redis.set(LOCK_KEY, '1', 'EX', 55, 'NX');
   if (got !== 'OK') return 0;
 
-  const pastDue = await db
-    .select({ driverId: balances.driverId })
+  const pastDueDrivers = await db
+    .select({ userId: balances.driverId })
     .from(balances)
     .where(
-      and(eq(balances.status, 'open'), sql`${balances.dueSunday} < now()`),
+      and(ne(balances.status, 'settled'), sql`${balances.dueSunday} < now()`),
     )
     .groupBy(balances.driverId);
 
+  const pastDuePosters = await db
+    .select({ userId: platformFees.posterId })
+    .from(platformFees)
+    .where(
+      and(
+        ne(platformFees.status, 'settled'),
+        sql`${platformFees.dueSunday} < now()`,
+      ),
+    )
+    .groupBy(platformFees.posterId);
+
+  const userIds = [
+    ...new Set([
+      ...pastDueDrivers.map((r) => r.userId),
+      ...pastDuePosters.map((r) => r.userId),
+    ]),
+  ];
+
   let locked = 0;
-  for (const row of pastDue) {
+  for (const userId of userIds) {
     const result = await db
       .update(users)
       .set({ status: 'locked', updatedAt: new Date() })
-      .where(and(eq(users.id, row.driverId), eq(users.status, 'active')))
+      .where(and(eq(users.id, userId), eq(users.status, 'active')))
       .returning({ id: users.id });
     locked += result.length;
   }
