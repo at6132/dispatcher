@@ -15,7 +15,13 @@ function toUser(user: AuthUserApi): AuthUser {
     name: user.name,
     onboardingComplete: user.onboardingComplete,
     completedDrivesCount: user.completedDrivesCount ?? 0,
+    availability: user.availability ?? 'offline',
     ...(user.onboarding ? { onboarding: user.onboarding } : {}),
+    ...(user.lastLat != null ? { lastLat: user.lastLat } : {}),
+    ...(user.lastLng != null ? { lastLng: user.lastLng } : {}),
+    ...(user.locationUpdatedAt
+      ? { locationUpdatedAt: user.locationUpdatedAt }
+      : {}),
   };
 }
 
@@ -40,7 +46,8 @@ export async function getSessionUser(): Promise<AuthUser | null> {
   } catch (err) {
     const status = (err as { status?: number }).status;
     const code = (err as { code?: string }).code;
-    if (status === 401 || status === 0) {
+    // Explicit unauth only — network (status 0) must throw so callers can keep cache.
+    if (status === 401) {
       logger.info('session', 'bootstrap.no_session', { status, code });
       return null;
     }
@@ -188,6 +195,18 @@ export async function saveOnboarding(
     return { ...user, onboardingComplete: true };
   }
   return user;
+}
+
+export async function savePresence(input: {
+  availability?: 'available' | 'busy' | 'offline';
+  lat?: number;
+  lng?: number;
+}): Promise<AuthUser> {
+  const data = await apiFetch<MeResponse>('/v1/me/presence', {
+    method: 'PUT',
+    body: JSON.stringify(input),
+  });
+  return toUser(data.user);
 }
 
 export async function updateProfileName(name: string): Promise<AuthUser> {

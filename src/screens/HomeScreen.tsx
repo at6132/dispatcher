@@ -1,4 +1,11 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ComponentRef,
+} from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -16,9 +23,11 @@ import {
   type NativeSyntheticEvent,
 } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
+import { Users } from 'lucide-react-native';
 
 import {
   applyToDrive,
+  listDirectOffers,
   listDrives,
   markDrivePickedUp,
   requestDriveCancel,
@@ -26,15 +35,19 @@ import {
   type DriveBoard,
   type DriveListItem,
 } from '../api/drives';
-import { mapApiError } from '../api/errors';
+import { isApiError, mapApiError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
+import { logger } from '../debug/logger';
 import { bottomNavClearance } from '../components/navigation/BottomNav';
 import { Button } from '../components/ui/Button';
 import { CompleteDriveModal } from '../components/ui/CompleteDriveModal';
 import { DriveCard } from '../components/ui/DriveCard';
 import { getCachedCoordinate } from '../components/ui/getCachedCoordinate';
+import { Icon } from '../components/ui/Icon';
+import { IncomingJobModal } from '../components/ui/IncomingJobModal';
 import { LoadingHint } from '../components/ui/LoadingHint';
 import { driverMatchesOpenDrive } from '../drives/matchDrive';
+import { useProfileViewer } from '../profiles/ProfileViewerContext';
 import { GlassSurface, colors, fonts, radius, space, type } from '../theme';
 
 const BOARDS: {
@@ -94,20 +107,37 @@ function splitActiveSections(
   ];
 }
 
+/** Oldest completed = Trip 0. Uses loaded history only (board limit 50). */
+function historyTripNumbers(items: DriveListItem[]): Map<string, number> {
+  const sorted = [...items].sort((a, b) => {
+    const ta = new Date(a.completedAt ?? a.updatedAt ?? a.createdAt).getTime();
+    const tb = new Date(b.completedAt ?? b.updatedAt ?? b.createdAt).getTime();
+    if (ta !== tb) return ta - tb;
+    return a.id.localeCompare(b.id);
+  });
+  const map = new Map<string, number>();
+  sorted.forEach((d, i) => map.set(d.id, i));
+  return map;
+}
+
 type HomeScreenProps = {
   /** Bump to refetch boards after an external mutation. */
   refreshToken?: number;
   /** Manage a drive you posted (open applicants, or active/history status). */
   onManageDrive?: (drive: DriveListItem) => void;
+  /** Open the shared driver directory. */
+  onPeoplePress?: () => void;
 };
 
 export function HomeScreen({
   refreshToken = 0,
   onManageDrive,
+  onPeoplePress,
 }: HomeScreenProps) {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
-  const pagerRef = useRef<Animated.ScrollView>(null);
+  const { openProfile } = useProfileViewer();
+  const pagerRef = useRef<ComponentRef<typeof Animated.ScrollView>>(null);
   const { width: pageWidth } = useWindowDimensions();
   const scrollX = useRef(new Animated.Value(0)).current;
   const indexRef = useRef(0);
@@ -120,7 +150,6 @@ export function HomeScreen({
   });
   const [applyingId, setApplyingId] = useState<string | null>(null);
   const [appliedIds, setAppliedIds] = useState<Set<string>>(() => new Set());
-  const applyingIdsRef = useRef<Set<string>>(new Set());
   const [applyError, setApplyError] = useState<string | null>(null);
   const [completingDrive, setCompletingDrive] = useState<DriveListItem | null>(
     null,
@@ -129,6 +158,32 @@ export function HomeScreen({
   const [pickupError, setPickupError] = useState<string | null>(null);
   const [cancellingId, setCancellingId] = useState<string | null>(null);
   const [cancelError, setCancelError] = useState<string | null>(null);
+  const [incomingOffer, setIncomingOffer] = useState<DriveListItem | null>(
+    null,
+  );
+  /** Stop 8s offer polling after auth death so we don't spam 401s. */
+  const offersPollStoppedRef = useRef(false);
+
+  const pollOffers = useCallback(async () => {
+    if (!user?.id || offersPollStoppedRef.current) return;
+    try {
+      const offers = await listDirectOffers({
+        viewerId: user.id,
+        limit: 10,
+      });
+      setIncomingOffer((current) => {
+        if (current && offers.some((o) => o.id === current.id)) return current;
+        return offers[0] ?? null;
+      });
+    } catch (err) {
+      if (isApiError(err) && err.status === 401) {
+        offersPollStoppedRef.current = true;
+        logger.warn('home', 'offers_poll_stopped_unauthorized');
+        return;
+      }
+      // Older APIs / offline — no offer popup
+    }
+  }, [user?.id]);
 
   const loadBoard = useCallback(
     async (board: DriveBoard, mode: 'initial' | 'refresh' = 'initial') => {
@@ -151,20 +206,11 @@ export function HomeScreen({
           : null;
         const items =
           board === 'open'
-            ? result.items
-                .filter(
-                  (d) =>
-                    d.status === 'open' &&
-                    driverMatchesOpenDrive(capacity, d, user?.id),
-                )
-                .slice()
-                .sort((a, b) => {
-                  const fav =
-                    Number(Boolean(b.posterIsFavorite)) -
-                    Number(Boolean(a.posterIsFavorite));
-                  if (fav !== 0) return fav;
-                  return b.createdAt.localeCompare(a.createdAt);
-                })
+            ? result.items.filter(
+                (d) =>
+                  d.status === 'open' &&
+                  driverMatchesOpenDrive(capacity, d, user?.id),
+              )
             : result.items;
         setBoards((prev) => ({
           ...prev,
@@ -177,16 +223,13 @@ export function HomeScreen({
           },
         }));
         if (board === 'open') {
-          // Only clear local “Applied” when the server says cleared/rejected.
-          // Do not wipe on null — a stale in-flight refresh can land after
-          // apply and would flip Applied back to Apply.
           setAppliedIds((prev) => {
             const next = new Set(prev);
             for (const item of items) {
               const status = item.viewerApplicationStatus;
               if (status === 'pending' || status === 'accepted') {
                 next.add(item.id);
-              } else if (status === 'cleared' || status === 'rejected') {
+              } else if (status === 'cleared' || status == null) {
                 next.delete(item.id);
               }
             }
@@ -214,6 +257,19 @@ export function HomeScreen({
   }, [index, loadBoard, refreshToken]);
 
   useEffect(() => {
+    offersPollStoppedRef.current = false;
+    void pollOffers();
+    const id = setInterval(() => {
+      if (offersPollStoppedRef.current) {
+        clearInterval(id);
+        return;
+      }
+      void pollOffers();
+    }, 8_000);
+    return () => clearInterval(id);
+  }, [pollOffers, refreshToken]);
+
+  useEffect(() => {
     const timers = BOARDS.map((b, i) =>
       i === index
         ? null
@@ -236,7 +292,11 @@ export function HomeScreen({
   const goTo = (next: number) => {
     const clamped = Math.max(0, Math.min(BOARD_COUNT - 1, next));
     setIndexSafe(clamped);
-    pagerRef.current?.scrollTo({ x: clamped * pageWidth, animated: true });
+    (
+      pagerRef.current as
+        | { scrollTo: (options: { x: number; animated: boolean }) => void }
+        | null
+    )?.scrollTo({ x: clamped * pageWidth, animated: true });
   };
 
   const onTrackLayout = (e: LayoutChangeEvent) => {
@@ -261,6 +321,8 @@ export function HomeScreen({
   const thumbStops = BOARDS.map((_, i) => i * segmentWidth);
 
   // Mid-swipe warp: stretch at halfway points, settle on each page.
+  // scaleX uses the view center as origin — do not left-compensate translateX
+  // or the thumb drifts under the middle (Active) label.
   const warpInput = pageStops.flatMap((p, i) =>
     i < BOARD_COUNT - 1 ? [p, p + pageWidth * 0.5] : [p],
   );
@@ -280,66 +342,21 @@ export function HomeScreen({
     extrapolate: 'clamp',
   });
 
-  // Keep stretch visually centered on the moving segment as scale grows.
-  const thumbX =
-    segmentWidth > 0
-      ? Animated.subtract(
-          thumbTranslate,
-          Animated.multiply(Animated.subtract(thumbScaleX, 1), segmentWidth / 2),
-        )
-      : thumbTranslate;
-
-  const markApplied = (driveId: string) => {
-    setAppliedIds((prev) => new Set(prev).add(driveId));
-    setBoards((prev) => ({
-      ...prev,
-      open: {
-        ...prev.open,
-        items: prev.open.items.map((d) =>
-          d.id === driveId
-            ? { ...d, viewerApplicationStatus: 'pending' as const }
-            : d,
-        ),
-      },
-    }));
-  };
-
   const onApply = async (driveId: string) => {
-    if (applyingIdsRef.current.has(driveId)) return;
-    applyingIdsRef.current.add(driveId);
     setApplyError(null);
     setApplyingId(driveId);
-    // Optimistic — Applied must not wait on GPS / network, and must not
-    // bounce back if a stale board refresh finishes mid-request.
-    markApplied(driveId);
     try {
       const coords = await getCachedCoordinate();
       await applyToDrive(driveId, coords ?? undefined);
+      setAppliedIds((prev) => new Set(prev).add(driveId));
     } catch (err) {
       const mapped = mapApiError(err);
       if (mapped.code === 'already_applied') {
-        markApplied(driveId);
+        setAppliedIds((prev) => new Set(prev).add(driveId));
       } else {
-        setAppliedIds((prev) => {
-          const next = new Set(prev);
-          next.delete(driveId);
-          return next;
-        });
-        setBoards((prev) => ({
-          ...prev,
-          open: {
-            ...prev.open,
-            items: prev.open.items.map((d) =>
-              d.id === driveId
-                ? { ...d, viewerApplicationStatus: undefined }
-                : d,
-            ),
-          },
-        }));
         setApplyError(mapped.message);
       }
     } finally {
-      applyingIdsRef.current.delete(driveId);
       setApplyingId(null);
     }
   };
@@ -450,6 +467,11 @@ export function HomeScreen({
     [boards.active.items, user?.id],
   );
 
+  const historyTripById = useMemo(
+    () => historyTripNumbers(boards.history.items),
+    [boards.history.items],
+  );
+
   const renderDriveCard = (
     item: DriveListItem,
     board: DriveBoard,
@@ -462,10 +484,11 @@ export function HomeScreen({
       status === 'accepted';
     const applyAgain = !applied && status === 'cleared';
     const canApply =
-      board === 'open' && !applied && status !== 'rejected';
+      board === 'open' && status !== 'rejected';
     return (
       <DriveCard
         drive={item}
+        board={board}
         viewerId={user?.id}
         onApply={canApply ? () => void onApply(item.id) : undefined}
         onManage={
@@ -492,6 +515,10 @@ export function HomeScreen({
         cancelling={cancellingId === item.id}
         applyAgain={applyAgain}
         showMap={opts?.showMap}
+        onOpenProfile={openProfile}
+        tripNumber={
+          board === 'history' ? historyTripById.get(item.id) : undefined
+        }
       />
     );
   };
@@ -525,12 +552,11 @@ export function HomeScreen({
           {
             paddingTop: insets.top + space.lg,
             paddingHorizontal: space.xl,
-            // Room for the floating profile PFP (40px) + gap
-            paddingRight: space.xl + 40 + space.md,
           },
         ]}
       >
-        <GlassSurface style={styles.pill} contentStyle={styles.pillInner} flat>
+        <View style={styles.headerRow}>
+        <GlassSurface style={[styles.pill, styles.pillGrow]} contentStyle={styles.pillInner} flat>
           <View
             style={styles.segments}
             accessibilityRole="tablist"
@@ -544,7 +570,7 @@ export function HomeScreen({
                   {
                     width: segmentWidth,
                     transform: [
-                      { translateX: thumbX },
+                      { translateX: thumbTranslate },
                       { scaleX: thumbScaleX },
                     ],
                   },
@@ -559,7 +585,12 @@ export function HomeScreen({
                   accessibilityRole="tab"
                   accessibilityState={{ selected }}
                   onPress={() => goTo(i)}
-                  style={styles.segment}
+                  style={[
+                    styles.segment,
+                    segmentWidth > 0
+                      ? { width: segmentWidth }
+                      : styles.segmentFlex,
+                  ]}
                 >
                   <Text
                     style={[
@@ -574,6 +605,20 @@ export function HomeScreen({
             })}
           </View>
         </GlassSurface>
+        {onPeoplePress ? (
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="People"
+            onPress={onPeoplePress}
+            style={({ pressed }) => [
+              styles.peopleButton,
+              pressed && styles.peopleButtonPressed,
+            ]}
+          >
+            <Icon icon={Users} size="md" color={colors.inkSoft} />
+          </Pressable>
+        ) : null}
+        </View>
       </View>
 
       <Animated.ScrollView
@@ -685,6 +730,20 @@ export function HomeScreen({
         onClose={() => setCompletingDrive(null)}
         onCompleted={onDriveCompleted}
       />
+      <IncomingJobModal
+        visible={incomingOffer != null}
+        drive={incomingOffer}
+        onClose={() => setIncomingOffer(null)}
+        onAccepted={() => {
+          setIncomingOffer(null);
+          void loadBoard('active', 'refresh');
+          void pollOffers();
+        }}
+        onDeclined={() => {
+          setIncomingOffer(null);
+          void pollOffers();
+        }}
+      />
     </View>
   );
 }
@@ -701,6 +760,27 @@ const styles = StyleSheet.create({
   },
   pill: {
     borderRadius: radius.xl,
+  },
+  pillGrow: {
+    flex: 1,
+  },
+  headerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: space.sm,
+  },
+  peopleButton: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.glassBorder,
+    backgroundColor: colors.glass,
+  },
+  peopleButtonPressed: {
+    opacity: 0.85,
   },
   pillInner: {
     padding: 4,
@@ -719,22 +799,25 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accentSoft,
   },
   segment: {
-    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: space.sm + 2,
     borderRadius: radius.lg,
     zIndex: 1,
   },
+  segmentFlex: {
+    flex: 1,
+  },
   segmentLabel: {
     fontFamily: fonts.sansMedium,
     fontSize: 14,
     letterSpacing: 0.2,
     color: colors.faint,
+    textAlign: 'center',
+    alignSelf: 'stretch',
   },
   segmentLabelOn: {
     color: colors.ink,
-    fontFamily: fonts.sansSemi,
   },
   pager: {
     flex: 1,
@@ -755,18 +838,15 @@ const styles = StyleSheet.create({
     height: space.md,
   },
   sectionHeader: {
-    gap: space.sm,
-    paddingBottom: space.md,
+    gap: space.xs,
+    paddingBottom: space.sm,
   },
   sectionHeaderFollow: {
-    paddingTop: space.xxl,
+    paddingTop: space.md,
   },
   sectionTitle: {
-    fontFamily: fonts.sansSemi,
-    fontSize: 16,
-    letterSpacing: 0.6,
-    lineHeight: 22,
-    color: colors.muted,
+    ...type.label,
+    color: colors.faint,
     textTransform: 'uppercase',
     paddingLeft: space.xs,
   },
@@ -786,6 +866,7 @@ const styles = StyleSheet.create({
   empty: {
     flexGrow: 1,
     justifyContent: 'center',
+    alignItems: 'center',
     gap: space.sm,
     paddingTop: space.xxxl,
     paddingHorizontal: space.xs,
@@ -793,11 +874,13 @@ const styles = StyleSheet.create({
   emptyTitle: {
     ...type.title,
     color: colors.ink,
+    textAlign: 'center',
   },
   emptyBody: {
     ...type.body,
     color: colors.muted,
     maxWidth: 280,
+    textAlign: 'center',
   },
   applyError: {
     ...type.caption,

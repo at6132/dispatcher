@@ -14,6 +14,7 @@ import { LinearGradient } from 'expo-linear-gradient';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import Svg, { Path } from 'react-native-svg';
 import { Home, Landmark, Plus } from 'lucide-react-native';
+import type { LucideIcon } from 'lucide-react-native';
 
 import { Icon } from '../ui/Icon';
 import { blur, colors, fonts, motion, space, type } from '../../theme';
@@ -24,32 +25,37 @@ import {
   type DockGeom,
 } from './dockPath';
 
-export type MainTab = 'home' | 'bank';
+export type MainTab = 'home' | 'profiles' | 'bank';
+export type AddOrigin = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
 
 type BottomNavProps = {
   active: MainTab;
   onChange: (tab: MainTab) => void;
-  onAddPress?: () => void;
+  onAddPress?: (origin: AddOrigin | null) => void;
 };
 
 /**
- * Compact organic dock — glass hugs Home · + · Bank (minimal empty chrome).
+ * Compact organic dock — glass hugs Home · + · Bank.
  */
-const FACE = 96;
+const FACE = 88;
 /** Thin rim around the plus — just enough to read the hug. */
 const RIM = 6;
 const MID_H = FACE + RIM * 2;
 /** End band tight to the tab content. */
 const END_H = 52;
-const PLUS = 52;
+const PLUS = 48;
 const BAR_HEIGHT = END_H;
-/** Gap between plus edge and Home / Bank. */
+/** Gap between plus edge and flanking tabs. */
 const FACE_GAP = 4;
-const TAB_W = 60;
+const TAB_W = 56;
 /** Glass past the outer tabs. */
-const SIDE_PAD = 8;
-const DOCK_W =
-  SIDE_PAD + TAB_W + FACE + FACE_GAP * 2 + TAB_W + SIDE_PAD;
+const SIDE_PAD = 6;
+const DOCK_W = SIDE_PAD + TAB_W + FACE + FACE_GAP * 2 + TAB_W + SIDE_PAD;
 
 const GEOM: DockGeom = {
   midH: MID_H,
@@ -84,27 +90,29 @@ export function BottomNav({ active, onChange, onAddPress }: BottomNavProps) {
           </View>
         ) : null}
 
-        {/* Tabs sit on the hug center-line; spacer keeps room for the face */}
         <View
           pointerEvents="box-none"
           style={[styles.row, { top: CIRCLE_CY - BAR_HEIGHT / 2 }]}
         >
-          <NavItem
-            label="Home"
-            active={active === 'home'}
-            onPress={() => onChange('home')}
-            icon={Home}
-          />
+          <View style={styles.tabCluster}>
+            <NavItem
+              label="Home"
+              active={active === 'home'}
+              onPress={() => onChange('home')}
+              icon={Home}
+            />
+          </View>
           <View style={styles.faceSpacer} />
-          <NavItem
-            label="Bank"
-            active={active === 'bank'}
-            onPress={() => onChange('bank')}
-            icon={Landmark}
-          />
+          <View style={[styles.tabCluster, styles.tabClusterRight]}>
+            <NavItem
+              label="Bank"
+              active={active === 'bank'}
+              onPress={() => onChange('bank')}
+              icon={Landmark}
+            />
+          </View>
         </View>
 
-        {/* Plus — exact center of the glass hug circle */}
         <View
           pointerEvents="box-none"
           style={[styles.faceLayer, { top: CIRCLE_CY - FACE / 2 }]}
@@ -197,7 +205,7 @@ type NavItemProps = {
   label: string;
   active: boolean;
   onPress: () => void;
-  icon: typeof Home;
+  icon: LucideIcon;
 };
 
 function NavItem({ label, active, onPress, icon }: NavItemProps) {
@@ -228,7 +236,7 @@ function NavItem({ label, active, onPress, icon }: NavItemProps) {
       >
         <Icon
           icon={icon}
-          size={24}
+          size={22}
           color={active ? colors.ink : colors.muted}
           strokeWidth={active ? 2 : 1.7}
         />
@@ -242,7 +250,11 @@ function NavItem({ label, active, onPress, icon }: NavItemProps) {
   );
 }
 
-function AddButton({ onPress }: { onPress?: () => void }) {
+function AddButton({
+  onPress,
+}: {
+  onPress?: (origin: AddOrigin | null) => void;
+}) {
   const scale = useRef(new Animated.Value(1)).current;
 
   const animateTo = (value: number) => {
@@ -258,7 +270,7 @@ function AddButton({ onPress }: { onPress?: () => void }) {
       <Pressable
         accessibilityRole="button"
         accessibilityLabel="Add"
-        onPress={onPress}
+        onPress={() => onPress?.(null)}
         onPressIn={() => animateTo(motion.pressScale)}
         onPressOut={() => animateTo(1)}
         style={({ pressed }) => [styles.face, pressed && styles.facePressed]}
@@ -336,7 +348,7 @@ const styles = StyleSheet.create({
   itemLabel: {
     ...type.label,
     fontFamily: fonts.sansMedium,
-    fontSize: 11,
+    fontSize: 10,
     letterSpacing: 0.3,
     textTransform: 'uppercase',
     color: colors.muted,
@@ -346,6 +358,15 @@ const styles = StyleSheet.create({
   },
   faceSpacer: {
     width: FACE + FACE_GAP * 2,
+  },
+  tabCluster: {
+    width: TAB_W,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'flex-end',
+  },
+  tabClusterRight: {
+    justifyContent: 'flex-start',
   },
   faceLayer: {
     position: 'absolute',

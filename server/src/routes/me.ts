@@ -23,6 +23,7 @@ import {
   deletePushToken,
   upsertPushToken,
 } from '../services/pushNotifications.js';
+import { updatePresence } from '../services/profiles.js';
 
 const vehicleClass = z.enum([
   'sedan',
@@ -97,6 +98,36 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
         requestId: request.id,
         userId: shortId(dto.id),
       });
+      return reply.send({ user: dto });
+    } catch (err) {
+      if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  app.put('/presence', async (request, reply) => {
+    const body = z
+      .object({
+        availability: z.enum(['available', 'busy', 'offline']).optional(),
+        lat: z.number().finite().optional(),
+        lng: z.number().finite().optional(),
+      })
+      .safeParse(request.body);
+    if (!body.success) {
+      return sendError(reply, 400, 'Invalid body', 'invalid_body');
+    }
+    try {
+      const user = requireUser(request);
+      await assertClientLimits(request, reply, {
+        name: 'me_presence',
+        ipLimit: 120,
+        userLimit: 90,
+        windowSec: 60,
+        failClosed: true,
+      });
+      const dto = await updatePresence(user.id, body.data);
       return reply.send({ user: dto });
     } catch (err) {
       if (err instanceof AppError) {

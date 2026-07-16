@@ -249,6 +249,17 @@ export function startTelegramAdminWorker(
   log?: FastifyBaseLogger,
 ): { stop: () => void } {
   if (running) return { stop: () => undefined };
+
+  const token = getTelegramBotToken();
+  const chats = getApprovedTelegramChatIds();
+  if (!token || chats.length === 0) {
+    log?.info(
+      { event: 'worker.telegram_admin.skip', reason: 'not_configured' },
+      'worker.telegram_admin.skip',
+    );
+    return { stop: () => undefined };
+  }
+
   running = true;
   let stopped = false;
 
@@ -256,6 +267,9 @@ export function startTelegramAdminWorker(
     while (!stopped) {
       try {
         await pollOnce(log);
+        // Yield between polls so HTTP I/O is never starved (long-poll
+        // usually waits; this guards empty/fast paths too).
+        await new Promise((r) => setTimeout(r, 500));
       } catch (err) {
         lastError = err instanceof Error ? err.message : String(err);
         log?.error(

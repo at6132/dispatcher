@@ -40,6 +40,10 @@ export type AuthUser = {
   /** Completed jobs where this user was poster or assignee. */
   completedDrivesCount?: number;
   onboarding?: OnboardingProfile;
+  availability?: 'available' | 'busy' | 'offline';
+  lastLat?: number;
+  lastLng?: number;
+  locationUpdatedAt?: string;
 };
 
 export type SignInInput = {

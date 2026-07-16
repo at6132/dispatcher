@@ -13,10 +13,10 @@ import {
   applyToDrive,
   completeDrive,
   getDrive,
-  getPublicProfile,
   type Drive,
   type PublicProfile,
 } from '../api/drives';
+import { getProfile } from '../api/profiles';
 import { mapApiError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
 import { formatPhoneDisplay } from '../auth/validation';
@@ -24,7 +24,7 @@ import { Button } from '../components/ui/Button';
 import { getCachedCoordinate } from '../components/ui/getCachedCoordinate';
 import { LoadingHint } from '../components/ui/LoadingHint';
 import { TextField } from '../components/ui/TextField';
-import { colors, fonts, space, type } from '../theme';
+import { colors, fonts, space, tripRouteColor, type } from '../theme';
 
 type DriveDetailScreenProps = {
   driveId: string;
@@ -75,9 +75,9 @@ export function DriveDetailScreen({
       const d = await getDrive(driveId);
       setDrive(d);
       const [p, a] = await Promise.all([
-        getPublicProfile(d.posterId).catch(() => null),
+        getProfile(d.posterId).catch(() => null),
         d.assigneeId
-          ? getPublicProfile(d.assigneeId).catch(() => null)
+          ? getProfile(d.assigneeId).catch(() => null)
           : Promise.resolve(null),
       ]);
       setPoster(p);
@@ -191,7 +191,9 @@ export function DriveDetailScreen({
           <>
             <View style={styles.hero}>
               <Text style={styles.eyebrow}>{statusCopy(drive.status)}</Text>
-              <Text style={styles.title}>{drive.routeText}</Text>
+              <Text style={[styles.title, { color: tripRouteColor(drive.status) }]}>
+                {drive.routeText}
+              </Text>
               {placeLine ? (
                 <Text style={styles.support}>{placeLine}</Text>
               ) : null}

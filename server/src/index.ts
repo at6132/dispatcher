@@ -4,7 +4,7 @@ import { migrate } from 'drizzle-orm/postgres-js/migrator';
 import { env } from './config/env.js';
 import { buildApp } from './app.js';
 import { closeDb, db } from './db/client.js';
-import { closeRedis } from './lib/redis.js';
+import { closeRedis, ensureRedisConnected } from './lib/redis.js';
 import {
   notifyTelegramForce,
   telegramAlertsEnabled,
@@ -26,13 +26,14 @@ async function main() {
   console.log(JSON.stringify({ event: 'boot.migrate.ok' }));
 
   const app = await buildApp();
-  const worker = startSundayLockWorker(app.log);
-  const tgAdmin = startTelegramAdminWorker(app.log);
+
+  let worker: NodeJS.Timeout | undefined;
+  let tgAdmin: { stop: () => void } | undefined;
 
   const shutdown = async (signal: string) => {
     app.log.info({ event: 'boot.shutdown', signal }, 'boot.shutdown');
-    clearInterval(worker);
-    tgAdmin.stop();
+    if (worker) clearInterval(worker);
+    tgAdmin?.stop();
     await app.close();
     await closeRedis();
     await closeDb();
@@ -66,7 +67,11 @@ async function main() {
     setTimeout(() => process.exit(1), 1500);
   });
 
-  await app.listen({ port: env.PORT, host: '0.0.0.0' });
+  // Railway public networking expects IPv6 (`::`), which dual-stacks IPv4 too.
+  await app.listen({ port: env.PORT, host: '::' });
+  // keepAlive above Railway proxy idle so responses don't stall mid-flight
+  app.server.keepAliveTimeout = 65_000;
+  app.server.headersTimeout = 66_000;
   app.log.info(
     {
       event: 'boot.listen',
@@ -77,6 +82,21 @@ async function main() {
     },
     'boot.listen',
   );
+
+  if (process.env.SKIP_WORKERS === '1') {
+    app.log.info({ event: 'boot.workers', skipped: true }, 'boot.workers');
+    return;
+  }
+
+  const redisOk = await ensureRedisConnected();
+  app.log.info({ event: 'boot.redis', ok: redisOk }, 'boot.redis');
+
+  // Defer background workers until after the first tick so boot probing
+  // isn't competing with Redis/DB work on a cold private network.
+  setTimeout(() => {
+    worker = startSundayLockWorker(app.log);
+    tgAdmin = startTelegramAdminWorker(app.log);
+  }, 1500);
 }
 
 main().catch((err) => {

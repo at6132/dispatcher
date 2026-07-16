@@ -3,10 +3,13 @@ import { StyleSheet, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { DriveListItem } from '../api/drives';
+import type { DirectSendTarget } from '../api/profiles';
 import {
   BottomNav,
+  type AddOrigin,
   type MainTab,
 } from '../components/navigation/BottomNav';
+import { ProfileViewerProvider } from '../profiles/ProfileViewerContext';
 import { syncPushRegistration } from '../notifications/registerPush';
 import { MistBackdrop } from '../theme';
 import { BankScreen } from './BankScreen';
@@ -14,19 +17,22 @@ import { CreateDriveSheet } from './CreateDriveSheet';
 import { HomeScreen } from './HomeScreen';
 import { ManageDriveSheet } from './ManageDriveSheet';
 import { ProfileButton, ProfileScreen } from './ProfileScreen';
+import { ProfilesScreen } from './ProfilesScreen';
 
 /**
- * Authenticated shell after onboarding — Home / Bank + center add.
+ * Authenticated shell after onboarding — Home / People / Bank + center add.
  */
 export function MainShell() {
   const insets = useSafeAreaInsets();
   const [tab, setTab] = useState<MainTab>('home');
   const [composeOpen, setComposeOpen] = useState(false);
+  const [addOrigin, setAddOrigin] = useState<AddOrigin | null>(null);
+  const [directTo, setDirectTo] = useState<DirectSendTarget | null>(null);
   const [managingDrive, setManagingDrive] = useState<DriveListItem | null>(
     null,
   );
-  const [profileOpen, setProfileOpen] = useState(false);
   const [boardRefresh, setBoardRefresh] = useState(0);
+  const [profileOpen, setProfileOpen] = useState(false);
 
   useEffect(() => {
     void syncPushRegistration();
@@ -37,44 +43,63 @@ export function MainShell() {
     setBoardRefresh((n) => n + 1);
   };
 
+  const openCompose = (origin: AddOrigin | null, target?: DirectSendTarget) => {
+    setDirectTo(target ?? null);
+    setAddOrigin(origin);
+    setComposeOpen(true);
+  };
+
   return (
     <MistBackdrop>
-      <View style={styles.root}>
-        <View style={styles.page}>
-          {tab === 'home' ? (
-            <HomeScreen
-              refreshToken={boardRefresh}
-              onManageDrive={setManagingDrive}
-            />
-          ) : (
-            <BankScreen />
-          )}
+      <ProfileViewerProvider onSendDirect={(target) => openCompose(null, target)}>
+        <View style={styles.root}>
+          <View style={styles.page}>
+            {tab === 'home' ? (
+              <HomeScreen
+                refreshToken={boardRefresh}
+                onManageDrive={setManagingDrive}
+                onPeoplePress={() => setTab('profiles')}
+              />
+            ) : tab === 'profiles' ? (
+              <ProfilesScreen
+                onSendDirect={(target) => openCompose(null, target)}
+              />
+            ) : (
+              <BankScreen />
+            )}
+          </View>
+          <BottomNav
+            active={tab}
+            onChange={setTab}
+            onAddPress={(origin) => openCompose(origin)}
+          />
+          <ProfileButton
+            topInset={insets.top}
+            onPress={() => setProfileOpen(true)}
+          />
+          <CreateDriveSheet
+            visible={composeOpen}
+            origin={addOrigin}
+            directTo={directTo}
+            onClose={() => {
+              setComposeOpen(false);
+              setAddOrigin(null);
+              setDirectTo(null);
+            }}
+            onCreated={bumpBoard}
+          />
+          <ManageDriveSheet
+            visible={managingDrive != null}
+            drive={managingDrive}
+            onClose={() => setManagingDrive(null)}
+            onChanged={bumpBoard}
+          />
+          <ProfileScreen
+            visible={profileOpen}
+            onClose={() => setProfileOpen(false)}
+          />
         </View>
-        <ProfileButton
-          topInset={insets.top}
-          onPress={() => setProfileOpen(true)}
-        />
-        <BottomNav
-          active={tab}
-          onChange={setTab}
-          onAddPress={() => setComposeOpen(true)}
-        />
-        <CreateDriveSheet
-          visible={composeOpen}
-          onClose={() => setComposeOpen(false)}
-          onCreated={bumpBoard}
-        />
-        <ManageDriveSheet
-          visible={managingDrive != null}
-          drive={managingDrive}
-          onClose={() => setManagingDrive(null)}
-          onChanged={bumpBoard}
-        />
-        <ProfileScreen
-          visible={profileOpen}
-          onClose={() => setProfileOpen(false)}
-        />
-      </View>
+      </ProfileViewerProvider>
     </MistBackdrop>
   );
 }

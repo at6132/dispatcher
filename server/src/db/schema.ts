@@ -41,6 +41,11 @@ export const photoKindEnum = pgEnum('photo_kind', [
   'exterior',
   'payment_proof',
 ]);
+export const driverAvailabilityEnum = pgEnum('driver_availability', [
+  'available',
+  'busy',
+  'offline',
+]);
 
 export const users = pgTable(
   'users',
@@ -74,6 +79,12 @@ export const driverProfiles = pgTable('driver_profiles', {
   selfPhotoKey: text('self_photo_key'),
   vehicleInteriorKey: text('vehicle_interior_key'),
   vehicleExteriorKey: text('vehicle_exterior_key'),
+  availability: driverAvailabilityEnum('availability')
+    .notNull()
+    .default('offline'),
+  lastLat: numeric('last_lat', { precision: 10, scale: 7 }),
+  lastLng: numeric('last_lng', { precision: 10, scale: 7 }),
+  locationUpdatedAt: timestamp('location_updated_at', { withTimezone: true }),
   updatedAt: timestamp('updated_at', { withTimezone: true })
     .notNull()
     .defaultNow(),
@@ -121,6 +132,10 @@ export const drives = pgTable(
     assigneeId: uuid('assignee_id').references(() => users.id, {
       onDelete: 'set null',
     }),
+    /** When set, this drive was sent directly to that driver (not open board). */
+    invitedDriverId: uuid('invited_driver_id').references(() => users.id, {
+      onDelete: 'set null',
+    }),
     costCents: integer('cost_cents'),
     miles: numeric('miles', { precision: 8, scale: 2 }),
     waitMinutes: integer('wait_minutes'),
@@ -145,6 +160,7 @@ export const drives = pgTable(
       .where(
         sql`${t.assigneeId} IS NOT NULL AND ${t.status} IN ('assigned', 'picked_up')`,
       ),
+    index('drives_invited_driver_idx').on(t.invitedDriverId),
   ],
 );
 

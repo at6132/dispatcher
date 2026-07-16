@@ -1,5 +1,5 @@
 import type { VehicleClass } from '../auth/types';
-import { apiFetch } from './client';
+import { apiFetch, ApiError } from './client';
 
 export type DriveStatus =
   | 'open'
@@ -10,6 +10,8 @@ export type DriveStatus =
 
 export type TripType = 'one_way' | 'round_trip';
 
+export type DriverAvailability = 'available' | 'busy' | 'offline';
+
 export type PublicProfile = {
   id: string;
   name: string;
@@ -17,6 +19,10 @@ export type PublicProfile = {
   completedDrivesCount?: number;
   /** True when the viewer has favorited this user. */
   isFavorite?: boolean;
+  availability?: DriverAvailability;
+  lastLat?: number;
+  lastLng?: number;
+  locationUpdatedAt?: string;
   onboarding?: {
     vehicleClass: VehicleClass;
     vehicleType: string;
@@ -39,6 +45,8 @@ export type Drive = {
   toPlace?: string;
   status: DriveStatus;
   assigneeId?: string;
+  /** Direct offer target — private until accept/decline. */
+  invitedDriverId?: string;
   passengerPhone?: string;
   address?: string;
   vehicleClass?: VehicleClass;
@@ -68,6 +76,8 @@ export type CreateDriveInput = {
   tripType: TripType;
   address?: string;
   extraInfo?: string;
+  /** Offer directly to this driver (they accept/decline). */
+  inviteDriverId?: string;
 };
 
 export type DriveListItem = Drive & {
@@ -105,6 +115,7 @@ function asListItem(raw: Drive & { poster?: PublicProfile; assignee?: PublicProf
       name: 'Driver',
       onboardingComplete: false,
       completedDrivesCount: 0,
+      availability: 'offline',
     },
     ...(raw.assignee ? { assignee: raw.assignee } : {}),
   };
@@ -122,6 +133,76 @@ export async function listDrives(
     items: (data.items ?? []).map(asListItem),
     ...(data.nextCursor ? { nextCursor: data.nextCursor } : {}),
   };
+}
+
+/**
+ * Direct jobs offered to the current user.
+ * Filters strictly — older APIs may ignore `status=offers` and return the
+ * open board, which must never trigger the IncomingJobModal.
+ */
+export async function listDirectOffers(opts: {
+  viewerId: string;
+  limit?: number;
+}): Promise<DriveListItem[]> {
+  const params = new URLSearchParams('status=offers');
+  if (opts.limit != null) params.set('limit', String(opts.limit));
+  const data = await apiFetch<ListDrivesResult>(
+    `/v1/drives?${params.toString()}`,
+  );
+  return (data.items ?? [])
+    .map(asListItem)
+    .filter(
+      (d) =>
+        d.status === 'open' &&
+        d.invitedDriverId != null &&
+        d.invitedDriverId === opts.viewerId,
+    );
+}
+
+function inviteRouteMissing(err: unknown): boolean {
+  return (
+    err instanceof ApiError &&
+    err.status === 404 &&
+    (err.code === 'not_found' || !err.code || err.code === 'Not found')
+  );
+}
+
+export async function acceptDirectInvite(driveId: string): Promise<Drive> {
+  try {
+    const data = await apiFetch<{ drive: Drive }>(
+      `/v1/drives/${driveId}/accept-invite`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+    return data.drive;
+  } catch (err) {
+    if (inviteRouteMissing(err)) {
+      throw new ApiError(
+        'Accept isn’t available on this server yet. The API needs a redeploy with invite routes.',
+        404,
+        'invite_routes_missing',
+      );
+    }
+    throw err;
+  }
+}
+
+export async function declineDirectInvite(driveId: string): Promise<Drive> {
+  try {
+    const data = await apiFetch<{ drive: Drive }>(
+      `/v1/drives/${driveId}/decline-invite`,
+      { method: 'POST', body: JSON.stringify({}) },
+    );
+    return data.drive;
+  } catch (err) {
+    if (inviteRouteMissing(err)) {
+      throw new ApiError(
+        'Decline isn’t available on this server yet. The API needs a redeploy with invite routes.',
+        404,
+        'invite_routes_missing',
+      );
+    }
+    throw err;
+  }
 }
 
 export async function getDrive(id: string): Promise<Drive> {
@@ -161,6 +242,7 @@ export type DriveApplication = {
   createdAt: string;
   /** True when the poster favorited this applicant. */
   isFavorite?: boolean;
+  favorited?: boolean;
   driver: PublicProfile & { phone?: string };
 };
 

@@ -9,13 +9,37 @@ export function getRedis(): Redis {
     redis = new Redis(env.REDIS_URL, {
       maxRetriesPerRequest: 2,
       enableReadyCheck: true,
-      lazyConnect: false,
+      // Don't block Fastify ready/listen on Redis connect.
+      lazyConnect: true,
+      connectTimeout: 10_000,
+      retryStrategy: (times) => {
+        if (times > 20) return null;
+        return Math.min(times * 200, 2000);
+      },
     });
     redis.on('error', (err: Error) => {
       console.error('[redis]', err.message);
     });
   }
   return redis;
+}
+
+/** Soft-connect Redis; never throw so the HTTP server can still bind. */
+export async function ensureRedisConnected(): Promise<boolean> {
+  try {
+    const r = getRedis();
+    if (r.status === 'wait' || r.status === 'end') {
+      await r.connect();
+    }
+    const pong = await r.ping();
+    return pong === 'PONG';
+  } catch (err) {
+    console.error(
+      '[redis] connect failed',
+      err instanceof Error ? err.message : String(err),
+    );
+    return false;
+  }
 }
 
 export async function checkRedis(): Promise<boolean> {

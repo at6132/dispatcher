@@ -35,7 +35,36 @@ export const colors = {
   fieldFocus: 'rgba(12, 16, 22, 0.45)',
   danger: '#D08A8A',
   success: '#7FA894',
+  /** Taken / active trip route titles — quiet steel blue. */
+  tripActive: '#8AABC4',
+  /** Completed / history trip route titles — quiet gold. */
+  tripHistory: '#C4A86A',
 } as const;
+
+/**
+ * Route title color by drive status (and optional board context).
+ * Canceled → danger · history/completed → gold · taken/active → blue · open → success.
+ */
+export function tripRouteColor(
+  status: string,
+  board?: 'open' | 'active' | 'history',
+): string {
+  const s = status.toLowerCase();
+  if (s === 'canceled' || s === 'cancelled') return colors.danger;
+  if (board === 'history' || s === 'completed') return colors.tripHistory;
+  if (
+    board === 'active' ||
+    s === 'assigned' ||
+    s === 'picked_up' ||
+    s === 'taken' ||
+    s === 'in_progress' ||
+    s === 'in-progress'
+  ) {
+    return colors.tripActive;
+  }
+  if (board === 'open' || s === 'open') return colors.success;
+  return colors.ink;
+}
 
 export const space = {
   xs: 4,

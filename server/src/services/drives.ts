@@ -28,9 +28,18 @@ import {
 function canSeePassenger(drive: {
   posterId: string;
   assigneeId: string | null;
+  invitedDriverId?: string | null;
   status: string;
 }, viewerId: string): boolean {
   if (viewerId === drive.posterId) return true;
+  // Direct offer — invitee sees full trip details before accepting
+  if (
+    drive.status === 'open' &&
+    drive.invitedDriverId != null &&
+    drive.invitedDriverId === viewerId
+  ) {
+    return true;
+  }
   if (
     drive.assigneeId === viewerId &&
     (drive.status === 'assigned' ||
@@ -71,6 +80,8 @@ export type DriveDto = {
   toPlace?: string;
   status: 'open' | 'assigned' | 'picked_up' | 'completed' | 'cancelled';
   assigneeId?: string;
+  /** When set, this drive was offered directly (not public open board). */
+  invitedDriverId?: string;
   passengerPhone?: string;
   address?: string;
   vehicleClass: 'sedan' | 'suv' | 'large_suv' | 'minivan' | 'sprinter';
@@ -117,6 +128,7 @@ function mapDrive(
     ...(row.toPlace ? { toPlace: row.toPlace } : {}),
     status: row.status,
     ...(row.assigneeId ? { assigneeId: row.assigneeId } : {}),
+    ...(row.invitedDriverId ? { invitedDriverId: row.invitedDriverId } : {}),
     ...(unlocked ? { passengerPhone: row.passengerPhone } : {}),
     ...(unlocked && row.address ? { address: row.address } : {}),
     vehicleClass: row.vehicleClass,
@@ -177,6 +189,8 @@ export async function createDrive(
     extraInfo?: string;
     fromPlace?: string;
     toPlace?: string;
+    /** Offer directly to this driver — private until they accept/decline. */
+    inviteDriverId?: string;
   },
 ): Promise<DriveDto> {
   const [poster] = await db
@@ -215,6 +229,56 @@ export async function createDrive(
   const extraInfo = input.extraInfo?.trim() || undefined;
   if (extraInfo && extraInfo.length > 1000) {
     throw new AppError(400, 'Extra info is too long', 'invalid_extra_info');
+  }
+
+  const inviteDriverId = input.inviteDriverId?.trim() || undefined;
+  if (inviteDriverId) {
+    if (inviteDriverId === posterId) {
+      throw new AppError(400, 'Cannot send a drive to yourself', 'invalid_invite');
+    }
+    const [invitee] = await db
+      .select()
+      .from(users)
+      .where(eq(users.id, inviteDriverId))
+      .limit(1);
+    if (!invitee || !invitee.onboardingComplete) {
+      throw new AppError(404, 'Driver not found', 'invite_not_found');
+    }
+    if (invitee.status === 'locked') {
+      throw new AppError(409, 'That driver is locked until balances settle', 'invite_locked');
+    }
+
+    const row = await db.transaction(async (tx) => {
+      const [drive] = await tx
+        .insert(drives)
+        .values({
+          posterId,
+          routeText,
+          passengerPhone: normalizePhone(input.passengerPhone),
+          vehicleClass: input.vehicleClass,
+          seats: input.seats,
+          tripType: input.tripType,
+          address,
+          extraInfo,
+          fromPlace: input.fromPlace?.trim() || undefined,
+          toPlace: input.toPlace?.trim() || undefined,
+          invitedDriverId: inviteDriverId,
+          status: 'open',
+        })
+        .returning();
+      if (!drive) throw new AppError(500, 'Could not create drive', 'create_failed');
+
+      await tx.insert(applications).values({
+        driveId: drive.id,
+        driverId: inviteDriverId,
+        status: 'pending',
+      });
+
+      return drive;
+    });
+
+    // Private offer — leave public open board cache alone
+    return mapDrive(row, posterId);
   }
 
   const [row] = await db
@@ -357,6 +421,10 @@ export async function listDrives(
     conditions.push(eq(drives.hiddenByPoster, false));
   } else if (query.status === 'open') {
     conditions.push(eq(drives.status, 'open'));
+    // Direct offers stay off the public board (poster still sees their own).
+    conditions.push(
+      or(sql`${drives.invitedDriverId} IS NULL`, eq(drives.posterId, viewerId))!,
+    );
     // Match viewer vehicle: same class, seats needed ≤ driver seats.
     // Posters still see their own open posts to manage applicants.
     const [profile] = await db
@@ -374,10 +442,15 @@ export async function listDrives(
           and(
             eq(drives.vehicleClass, profile.vehicleClass),
             lte(drives.seats, profile.seats),
+            sql`${drives.invitedDriverId} IS NULL`,
           ),
         )!,
       );
     }
+  } else if (query.status === 'offers') {
+    // Direct jobs offered to this driver — awaiting accept/decline
+    conditions.push(eq(drives.status, 'open'));
+    conditions.push(eq(drives.invitedDriverId, viewerId));
   } else if (query.status === 'assigned' || query.status === 'active') {
     // Active board — assigned or picked-up drives the viewer is in
     conditions.push(
@@ -494,6 +567,7 @@ export async function listDrives(
       name: 'Driver',
       onboardingComplete: false,
       completedDrivesCount: 0,
+      availability: 'offline' as const,
     };
     const assignee = row.assigneeId ? profiles.get(row.assigneeId) : undefined;
     const coords = assigneeCoordsByDrive.get(row.id);
@@ -535,14 +609,23 @@ export async function getDrive(viewerId: string, driveId: string): Promise<Drive
   const [row] = await db.select().from(drives).where(eq(drives.id, driveId)).limit(1);
   if (!row) throw new AppError(404, 'Drive not found', 'drive_not_found');
 
-  const isParty = row.posterId === viewerId || row.assigneeId === viewerId;
+  const isParty =
+    row.posterId === viewerId ||
+    row.assigneeId === viewerId ||
+    row.invitedDriverId === viewerId;
   const [viewerApplicationStatus, favoriteIds] = await Promise.all([
     loadViewerApplicationStatus(viewerId, driveId),
     listFavoriteUserIds(viewerId),
   ]);
   const posterIsFavorite = favoriteIds.has(row.posterId);
+  // Private direct offers — only poster + invitee
+  if (row.status === 'open' && row.invitedDriverId) {
+    if (!isParty) {
+      throw new AppError(404, 'Drive not found', 'drive_not_found');
+    }
+    return mapDrive(row, viewerId, viewerApplicationStatus, posterIsFavorite);
+  }
   // Open board is public to authenticated users; assigned/completed only to parties
-  // (completed also visible on public completed feed, but detail still party-or-completed)
   if (row.status === 'open') {
     return mapDrive(row, viewerId, viewerApplicationStatus, posterIsFavorite);
   }
@@ -579,6 +662,13 @@ export async function applyToDrive(
       if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
       if (drive.status !== 'open') {
         throw new AppError(409, 'Drive is not open', 'drive_not_open');
+      }
+      if (drive.invitedDriverId) {
+        throw new AppError(
+          403,
+          'This drive was sent directly — it isn’t on the open board',
+          'direct_invite_only',
+        );
       }
       if (drive.posterId === driverId) {
         throw new AppError(400, 'Cannot apply to your own drive', 'cannot_self_apply');
@@ -765,6 +855,7 @@ export async function listApplications(posterId: string, driveId: string) {
         lng: r.application.lng ? Number(r.application.lng) : undefined,
         createdAt: r.application.createdAt.toISOString(),
         ...(isFavorite ? { isFavorite: true as const } : {}),
+        favorited: isFavorite,
         // Poster-only context: driver phone is needed to coordinate after accept UX
         driver: { ...profile, phone: r.user.phone },
       };
@@ -779,6 +870,137 @@ export async function listApplications(posterId: string, driveId: string) {
   });
 
   return items;
+}
+
+/** Invitee accepts a direct job offer. */
+export async function acceptDirectInvite(
+  driverId: string,
+  driveId: string,
+): Promise<DriveDto> {
+  return withLock(`drive:${driveId}:mutate`, async () =>
+    db.transaction(async (tx) => {
+      const [drive] = await tx
+        .select()
+        .from(drives)
+        .where(eq(drives.id, driveId))
+        .for('update');
+      if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
+      if (drive.invitedDriverId !== driverId) {
+        throw new AppError(403, 'This offer isn’t for you', 'forbidden');
+      }
+      if (drive.status !== 'open' || drive.assigneeId) {
+        throw new AppError(
+          409,
+          'This offer is no longer available',
+          'offer_unavailable',
+        );
+      }
+
+      const [app] = await tx
+        .select()
+        .from(applications)
+        .where(
+          and(
+            eq(applications.driveId, driveId),
+            eq(applications.driverId, driverId),
+          ),
+        )
+        .for('update');
+      if (!app || app.status !== 'pending') {
+        throw new AppError(404, 'Offer not found', 'offer_not_found');
+      }
+
+      const busy = await findActiveAssignment(tx, driverId, driveId);
+      if (busy) {
+        throw new AppError(
+          409,
+          'Finish your current job before accepting another.',
+          'driver_busy',
+        );
+      }
+
+      await tx
+        .update(applications)
+        .set({ status: 'accepted', updatedAt: new Date() })
+        .where(eq(applications.id, app.id));
+
+      await tx
+        .update(applications)
+        .set({ status: 'rejected', updatedAt: new Date() })
+        .where(
+          and(
+            eq(applications.driveId, driveId),
+            ne(applications.id, app.id),
+            eq(applications.status, 'pending'),
+          ),
+        );
+
+      const [updated] = await tx
+        .update(drives)
+        .set({
+          status: 'assigned',
+          assigneeId: driverId,
+          updatedAt: new Date(),
+        })
+        .where(and(eq(drives.id, driveId), eq(drives.status, 'open')))
+        .returning();
+      if (!updated) {
+        throw new AppError(409, 'Offer is no longer available', 'offer_unavailable');
+      }
+      return mapDrive(updated, driverId);
+    }),
+  );
+}
+
+/** Invitee declines a direct job offer — cancels the private drive. */
+export async function declineDirectInvite(
+  driverId: string,
+  driveId: string,
+): Promise<DriveDto> {
+  return withLock(`drive:${driveId}:mutate`, async () =>
+    db.transaction(async (tx) => {
+      const [drive] = await tx
+        .select()
+        .from(drives)
+        .where(eq(drives.id, driveId))
+        .for('update');
+      if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
+      if (drive.invitedDriverId !== driverId) {
+        throw new AppError(403, 'This offer isn’t for you', 'forbidden');
+      }
+      if (drive.status !== 'open') {
+        throw new AppError(
+          409,
+          'This offer is no longer available',
+          'offer_unavailable',
+        );
+      }
+
+      await tx
+        .update(applications)
+        .set({ status: 'rejected', updatedAt: new Date() })
+        .where(
+          and(
+            eq(applications.driveId, driveId),
+            eq(applications.driverId, driverId),
+            eq(applications.status, 'pending'),
+          ),
+        );
+
+      const [updated] = await tx
+        .update(drives)
+        .set({
+          status: 'cancelled',
+          updatedAt: new Date(),
+        })
+        .where(and(eq(drives.id, driveId), eq(drives.status, 'open')))
+        .returning();
+      if (!updated) {
+        throw new AppError(409, 'Offer is no longer available', 'offer_unavailable');
+      }
+      return mapDrive(updated, driverId);
+    }),
+  );
 }
 
 export async function acceptApplication(

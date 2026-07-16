@@ -128,6 +128,24 @@ export function mapApiError(
             'Finish your current job before taking or applying to another.',
           code: err.code,
         };
+      case 'invite_routes_missing':
+        return {
+          message:
+            err.message ||
+            'Accept/Decline isn’t on this server yet. Point the app at an API build that includes invite routes.',
+          code: err.code,
+        };
+      case 'offer_unavailable':
+        return {
+          message: 'This offer is no longer available.',
+          code: err.code,
+        };
+      case 'offer_not_found':
+      case 'drive_not_found':
+        return {
+          message: 'That job offer couldn’t be found.',
+          code: err.code,
+        };
       case 'create_failed':
       case 'internal':
         return {
@@ -139,6 +157,18 @@ export function mapApiError(
         };
       default:
         break;
+    }
+
+    // Bare "Not found" from missing routes is unhelpful in the modal.
+    if (
+      err.status === 404 &&
+      (!err.message || /^not\s*found$/i.test(err.message.trim()))
+    ) {
+      return {
+        message:
+          'Couldn’t reach that action on the server. The API may need a redeploy.',
+        code: err.code ?? 'not_found',
+      };
     }
 
     // Fall back to a cleaned server message when code is unknown.

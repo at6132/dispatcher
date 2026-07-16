@@ -27,7 +27,11 @@ let refreshInFlight: Promise<boolean> | null = null;
 async function refreshSession(): Promise<boolean> {
   if (!API_URL) return false;
   const refreshToken = await getRefreshToken();
-  if (!refreshToken) return false;
+  if (!refreshToken) {
+    logger.warn('api', 'refresh.skip_no_token');
+    await clearTokens();
+    return false;
+  }
   const requestId = newRequestId();
   logger.info('api', 'refresh.start', { requestId });
   try {
@@ -42,7 +46,7 @@ async function refreshSession(): Promise<boolean> {
     });
     const serverRequestId = res.headers.get('x-request-id') ?? requestId;
     if (!res.ok) {
-      logger.warn('api', 'refresh.fail', {
+      logger.warn('api', 'refresh.fail_clear_tokens', {
         requestId: serverRequestId,
         status: res.status,
       });
@@ -57,6 +61,7 @@ async function refreshSession(): Promise<boolean> {
     logger.info('api', 'refresh.ok', { requestId: serverRequestId });
     return true;
   } catch (err) {
+    // Network blip — keep tokens so a later retry can succeed offline-friendly.
     logger.warn('api', 'refresh.network_error', {
       requestId,
       err: err instanceof Error ? err.message : String(err),
@@ -125,9 +130,11 @@ export async function apiFetch<T>(
   const serverRequestId = res.headers.get('x-request-id') ?? requestId;
 
   if (res.status === 401 && init.auth !== false && init.retry !== false) {
+    const hadRefresh = Boolean(await getRefreshToken());
     logger.info('api', 'unauthorized_retry_refresh', {
       requestId: serverRequestId,
       path,
+      hadRefresh,
     });
     if (!refreshInFlight) {
       refreshInFlight = refreshSession().finally(() => {
@@ -138,6 +145,12 @@ export async function apiFetch<T>(
     if (ok) {
       return apiFetch<T>(path, { ...init, retry: false });
     }
+    // Refresh failed or missing — tokens cleared; surface 401 without another retry.
+    logger.warn('api', 'unauthorized_session_cleared', {
+      requestId: serverRequestId,
+      path,
+      hadRefresh,
+    });
   }
 
   if (res.status === 204) {
