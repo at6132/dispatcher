@@ -9,6 +9,7 @@ import {
   notifyTelegramForce,
   telegramAlertsEnabled,
 } from './lib/telegram.js';
+import { startLatencyAlertsWorker } from './workers/latencyAlerts.js';
 import { startSundayLockWorker } from './workers/sundayLock.js';
 import { startTelegramAdminWorker } from './workers/telegramAdmin.js';
 
@@ -28,11 +29,13 @@ async function main() {
   const app = await buildApp();
 
   let worker: NodeJS.Timeout | undefined;
+  let latencyWorker: NodeJS.Timeout | undefined;
   let tgAdmin: { stop: () => void } | undefined;
 
   const shutdown = async (signal: string) => {
     app.log.info({ event: 'boot.shutdown', signal }, 'boot.shutdown');
     if (worker) clearInterval(worker);
+    if (latencyWorker) clearInterval(latencyWorker);
     tgAdmin?.stop();
     await app.close();
     await closeRedis();
@@ -95,6 +98,7 @@ async function main() {
   // isn't competing with Redis/DB work on a cold private network.
   setTimeout(() => {
     worker = startSundayLockWorker(app.log);
+    latencyWorker = startLatencyAlertsWorker(app.log);
     tgAdmin = startTelegramAdminWorker(app.log);
   }, 1500);
 }

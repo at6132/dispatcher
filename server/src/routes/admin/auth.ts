@@ -130,8 +130,8 @@ export const adminAuthRoutes: FastifyPluginAsync = async (app) => {
     });
   });
 
-  /** Lightweight public status for debugging Telegram 2FA (no secrets). */
-  app.get('/debug', async (_request, reply) => {
+  /** Lightweight admin-only status for debugging Telegram 2FA (no secrets). */
+  app.get('/debug', { preHandler: requireAdmin }, async (_request, reply) => {
     const { getTelegramAdminWorkerDebug } = await import(
       '../../workers/telegramAdmin.js'
     );

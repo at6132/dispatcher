@@ -15,6 +15,7 @@ import {
   declineDirectInvite,
   type DriveListItem,
 } from '../../api/drives';
+import { createIdempotencyKey } from '../../api/client';
 import { mapApiError } from '../../api/errors';
 import { VEHICLE_CLASS_OPTIONS } from '../../auth/types';
 import {
@@ -47,9 +48,13 @@ export function IncomingJobModal({
   const [error, setError] = useState<string | null>(null);
   const opacity = useRef(new Animated.Value(0)).current;
   const scale = useRef(new Animated.Value(0.94)).current;
+  const acceptKeyRef = useRef<string | null>(null);
+  const declineKeyRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (!visible) return;
+    acceptKeyRef.current = null;
+    declineKeyRef.current = null;
     setBusy(null);
     setError(null);
     opacity.setValue(0);
@@ -84,10 +89,13 @@ export function IncomingJobModal({
   const posterName = drive.poster?.name?.trim() || 'Dispatcher';
 
   const onAccept = async () => {
+    const idempotencyKey =
+      acceptKeyRef.current ?? (acceptKeyRef.current = createIdempotencyKey());
     setBusy('accept');
     setError(null);
     try {
-      await acceptDirectInvite(drive.id);
+      await acceptDirectInvite(drive.id, { idempotencyKey });
+      acceptKeyRef.current = null;
       onAccepted();
     } catch (err) {
       const mapped = mapApiError(err);
@@ -98,10 +106,13 @@ export function IncomingJobModal({
   };
 
   const onDecline = async () => {
+    const idempotencyKey =
+      declineKeyRef.current ?? (declineKeyRef.current = createIdempotencyKey());
     setBusy('decline');
     setError(null);
     try {
-      await declineDirectInvite(drive.id);
+      await declineDirectInvite(drive.id, { idempotencyKey });
+      declineKeyRef.current = null;
       onDeclined();
     } catch (err) {
       const mapped = mapApiError(err);

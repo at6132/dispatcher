@@ -1,4 +1,4 @@
-import { and, eq, gt, isNull, or, sql } from 'drizzle-orm';
+import { and, eq, gt, inArray, isNull, or, sql } from 'drizzle-orm';
 import { randomUUID } from 'node:crypto';
 
 import { env } from '../config/env.js';
@@ -35,6 +35,10 @@ export type AuthUserDto = {
     selfPhotoUri?: string;
     vehicleInteriorUri?: string;
     vehicleExteriorUri?: string;
+    /** Stable S3 object key — use as image cache key (presigned URLs rotate). */
+    selfPhotoKey?: string;
+    vehicleInteriorKey?: string;
+    vehicleExteriorKey?: string;
     yearsDrivingUpstate: number;
     extraInfo?: string;
     zelle?: string;
@@ -83,6 +87,10 @@ export type PublicProfileDto = {
     selfPhotoUri?: string;
     vehicleInteriorUri?: string;
     vehicleExteriorUri?: string;
+    /** Stable S3 object key — use as image cache key (presigned URLs rotate). */
+    selfPhotoKey?: string;
+    vehicleInteriorKey?: string;
+    vehicleExteriorKey?: string;
     yearsDrivingUpstate: number;
     extraInfo?: string;
   };
@@ -100,6 +108,77 @@ export async function countCompletedDrives(userId: string): Promise<number> {
       ),
     );
   return Number(row?.c ?? 0);
+}
+
+function toPublicProfileDto(
+  user: {
+    id: string;
+    name: string;
+    onboardingComplete: boolean;
+  },
+  profile: typeof driverProfiles.$inferSelect | null | undefined,
+  completedDrivesCount: number,
+  photos: {
+    selfPhotoUri?: string;
+    vehicleInteriorUri?: string;
+    vehicleExteriorUri?: string;
+  },
+): PublicProfileDto {
+  const availability = profile?.availability ?? 'offline';
+  // Location only when online (available / busy) — used for direct-send maps.
+  const shareLocation = availability === 'available' || availability === 'busy';
+
+  let lastLat: number | undefined;
+  let lastLng: number | undefined;
+  let locationUpdatedAt: string | undefined;
+  if (profile?.lastLat != null && profile?.lastLng != null) {
+    const lat = Number(profile.lastLat);
+    const lng = Number(profile.lastLng);
+    if (Number.isFinite(lat) && Number.isFinite(lng)) {
+      lastLat = lat;
+      lastLng = lng;
+    }
+  }
+  if (profile?.locationUpdatedAt) {
+    locationUpdatedAt = profile.locationUpdatedAt.toISOString();
+  }
+
+  const dto: PublicProfileDto = {
+    id: user.id,
+    name: user.name,
+    onboardingComplete: user.onboardingComplete,
+    completedDrivesCount,
+    availability,
+    ...(shareLocation && lastLat != null ? { lastLat } : {}),
+    ...(shareLocation && lastLng != null ? { lastLng } : {}),
+    ...(shareLocation && locationUpdatedAt ? { locationUpdatedAt } : {}),
+  };
+
+  if (profile) {
+    dto.onboarding = {
+      vehicleClass: profile.vehicleClass,
+      vehicleType: profile.vehicleType,
+      seats: profile.seats,
+      yearsDrivingUpstate: profile.yearsDrivingUpstate,
+      ...(profile.extraInfo ? { extraInfo: profile.extraInfo } : {}),
+      ...(photos.selfPhotoUri ? { selfPhotoUri: photos.selfPhotoUri } : {}),
+      ...(photos.vehicleInteriorUri
+        ? { vehicleInteriorUri: photos.vehicleInteriorUri }
+        : {}),
+      ...(photos.vehicleExteriorUri
+        ? { vehicleExteriorUri: photos.vehicleExteriorUri }
+        : {}),
+      ...(profile.selfPhotoKey ? { selfPhotoKey: profile.selfPhotoKey } : {}),
+      ...(profile.vehicleInteriorKey
+        ? { vehicleInteriorKey: profile.vehicleInteriorKey }
+        : {}),
+      ...(profile.vehicleExteriorKey
+        ? { vehicleExteriorKey: profile.vehicleExteriorKey }
+        : {}),
+    };
+  }
+
+  return dto;
 }
 
 /** Safe for other drivers — no phone, zelle, or lock status. */
@@ -138,10 +217,103 @@ export async function toPublicProfile(userId: string): Promise<PublicProfileDto>
             ...(full.onboarding.vehicleExteriorUri
               ? { vehicleExteriorUri: full.onboarding.vehicleExteriorUri }
               : {}),
+            ...(full.onboarding.selfPhotoKey
+              ? { selfPhotoKey: full.onboarding.selfPhotoKey }
+              : {}),
+            ...(full.onboarding.vehicleInteriorKey
+              ? { vehicleInteriorKey: full.onboarding.vehicleInteriorKey }
+              : {}),
+            ...(full.onboarding.vehicleExteriorKey
+              ? { vehicleExteriorKey: full.onboarding.vehicleExteriorKey }
+              : {}),
           },
         }
       : {}),
   };
+}
+
+/**
+ * Batch-load public profiles for a board page.
+ * Avoids N×3 queries (users + driverProfiles + completed-count) against a pooled
+ * connection at board-load time — one join + one grouped count, then local SigV4
+ * photo presigns in parallel (no network round trip to S3).
+ */
+export async function loadPublicProfiles(
+  userIds: string[],
+): Promise<Map<string, PublicProfileDto>> {
+  const ids = [...new Set(userIds)].filter(Boolean);
+  const out = new Map<string, PublicProfileDto>();
+  if (ids.length === 0) return out;
+
+  // Completed counts in one grouped query (UNION dedupes drive+user so a trip
+  // where the user is both poster and assignee still counts once — same as
+  // countCompletedDrives' OR filter).
+  const idList = sql.join(
+    ids.map((id) => sql`${id}::uuid`),
+    sql`, `,
+  );
+  const [rows, countRows] = await Promise.all([
+    db
+      .select({
+        user: users,
+        profile: driverProfiles,
+      })
+      .from(users)
+      .leftJoin(driverProfiles, eq(driverProfiles.userId, users.id))
+      .where(inArray(users.id, ids)),
+    db
+      .select({
+        userId: sql<string>`counts.user_id`,
+        c: sql<number>`counts.c`,
+      })
+      .from(
+        sql`(
+          SELECT user_id, count(*)::int AS c
+          FROM (
+            SELECT poster_id AS user_id, id
+            FROM drives
+            WHERE status = 'completed' AND poster_id IN (${idList})
+            UNION
+            SELECT assignee_id AS user_id, id
+            FROM drives
+            WHERE status = 'completed' AND assignee_id IN (${idList})
+          ) t
+          GROUP BY user_id
+        ) AS counts`,
+      ),
+  ]);
+
+  const completedByUser = new Map<string, number>();
+  for (const row of countRows) {
+    if (row.userId) completedByUser.set(row.userId, Number(row.c ?? 0));
+  }
+
+  await Promise.all(
+    rows.map(async ({ user, profile }) => {
+      const photos = profile
+        ? await Promise.all([
+            resolvePhotoUri(profile.selfPhotoKey),
+            resolvePhotoUri(profile.vehicleInteriorKey),
+            resolvePhotoUri(profile.vehicleExteriorKey),
+          ]).then(([selfPhotoUri, vehicleInteriorUri, vehicleExteriorUri]) => ({
+            ...(selfPhotoUri ? { selfPhotoUri } : {}),
+            ...(vehicleInteriorUri ? { vehicleInteriorUri } : {}),
+            ...(vehicleExteriorUri ? { vehicleExteriorUri } : {}),
+          }))
+        : {};
+      out.set(
+        user.id,
+        toPublicProfileDto(
+          user,
+          profile,
+          completedByUser.get(user.id) ?? 0,
+          photos,
+        ),
+      );
+    }),
+  );
+
+  return out;
 }
 
 export async function toAuthUser(userId: string): Promise<AuthUserDto> {
@@ -183,6 +355,13 @@ export async function toAuthUser(userId: string): Promise<AuthUserDto> {
       ...(selfPhotoUri ? { selfPhotoUri } : {}),
       ...(vehicleInteriorUri ? { vehicleInteriorUri } : {}),
       ...(vehicleExteriorUri ? { vehicleExteriorUri } : {}),
+      ...(profile.selfPhotoKey ? { selfPhotoKey: profile.selfPhotoKey } : {}),
+      ...(profile.vehicleInteriorKey
+        ? { vehicleInteriorKey: profile.vehicleInteriorKey }
+        : {}),
+      ...(profile.vehicleExteriorKey
+        ? { vehicleExteriorKey: profile.vehicleExteriorKey }
+        : {}),
     };
     if (profile.lastLat != null && profile.lastLng != null) {
       const lat = Number(profile.lastLat);

@@ -26,6 +26,10 @@ export type OnboardingProfile = {
   /** Max one each */
   vehicleInteriorUri?: string;
   vehicleExteriorUri?: string;
+  /** Stable S3 object key — use as image cache key (presigned URLs rotate). */
+  selfPhotoKey?: string;
+  vehicleInteriorKey?: string;
+  vehicleExteriorKey?: string;
   yearsDrivingUpstate: number;
   extraInfo?: string;
   /** Zelle email or phone — optional unless posting rides */

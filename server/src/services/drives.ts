@@ -20,7 +20,7 @@ import { isUniqueViolation, withLock } from '../lib/locks.js';
 import { isValidPhone, nextSundayDeadlineNy, normalizePhone } from '../lib/phone.js';
 import { getRedis } from '../lib/redis.js';
 import { presignGet } from '../lib/s3.js';
-import { toAuthUser, toPublicProfile } from './auth.js';
+import { toAuthUser, toPublicProfile, loadPublicProfiles } from './auth.js';
 import { listFavoriteUserIds } from './favorites.js';
 import { assertOwnedConfirmedPhotoKey } from './onboarding.js';
 import { listPlatformFeesForPoster } from './platformFees.js';
@@ -532,16 +532,9 @@ export async function listDrives(
     if (row.assigneeId) profileIds.add(row.assigneeId);
   }
 
-  const profiles = new Map<string, Awaited<ReturnType<typeof toPublicProfile>>>();
-  await Promise.all(
-    [...profileIds].map(async (id) => {
-      try {
-        profiles.set(id, await toPublicProfile(id));
-      } catch {
-        // Skip missing profiles — list still returns the drive
-      }
-    }),
-  );
+  // Batch profiles: one users⋈profiles join + one grouped completed-count
+  // instead of N×3 queries (toPublicProfile) against the pool at board-load.
+  const profiles = await loadPublicProfiles([...profileIds]);
 
   const viewerAppByDrive = new Map<string, NonNullable<DriveDto['viewerApplicationStatus']>>();
   const assigneeCoordsByDrive = new Map<string, { lat: number; lng: number }>();

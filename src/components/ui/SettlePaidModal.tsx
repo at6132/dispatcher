@@ -17,6 +17,7 @@ import {
   markBalancePaid,
   markPlatformFeePaid,
 } from '../../api/balances';
+import { createIdempotencyKey } from '../../api/client';
 import { mapApiError } from '../../api/errors';
 import { uploadPaymentProof } from '../../api/photos';
 import { colors, fonts, motion, radius, space, type } from '../../theme';
@@ -52,9 +53,13 @@ export function SettlePaidModal({
 
   const cardOpacity = useRef(new Animated.Value(0)).current;
   const cardScale = useRef(new Animated.Value(0.94)).current;
+  const mutationKeysRef = useRef(new Map<string, string>());
+  const settlementProofKeyRef = useRef<string | undefined>(undefined);
 
   useEffect(() => {
     if (!visible) return;
+    mutationKeysRef.current.clear();
+    settlementProofKeyRef.current = undefined;
     setProofUri(undefined);
     setError(null);
     setSubmitting(false);
@@ -87,10 +92,11 @@ export function SettlePaidModal({
     setSubmitting(true);
     Keyboard.dismiss();
     try {
-      let settlementProofKey: string | undefined;
-      if (target.action === 'markPaid' && proofUri) {
+      let settlementProofKey = settlementProofKeyRef.current;
+      if (target.action === 'markPaid' && proofUri && !settlementProofKey) {
         try {
           settlementProofKey = await uploadPaymentProof(proofUri);
+          settlementProofKeyRef.current = settlementProofKey;
         } catch {
           setError('Couldn’t upload screenshot. Try again or remove it.');
           setSubmitting(false);
@@ -100,16 +106,28 @@ export function SettlePaidModal({
 
       const kind = target.kind ?? 'balance';
       for (const id of target.balanceIds) {
+        const action = `${target.key}:${target.action}:${kind}:${id}`;
+        const idempotencyKey =
+          mutationKeysRef.current.get(action) ?? createIdempotencyKey();
+        mutationKeysRef.current.set(action, idempotencyKey);
         if (target.action === 'markPaid') {
           if (kind === 'platformFee') {
-            await markPlatformFeePaid(id, { settlementProofKey });
+            await markPlatformFeePaid(id, {
+              settlementProofKey,
+              idempotencyKey,
+            });
           } else {
-            await markBalancePaid(id, { settlementProofKey });
+            await markBalancePaid(id, {
+              settlementProofKey,
+              idempotencyKey,
+            });
           }
         } else {
-          await confirmBalanceReceived(id);
+          await confirmBalanceReceived(id, { idempotencyKey });
         }
       }
+      mutationKeysRef.current.clear();
+      settlementProofKeyRef.current = undefined;
       onSettled();
     } catch (err) {
       setError(mapApiError(err).message);
@@ -186,6 +204,8 @@ export function SettlePaidModal({
                     uri={proofUri}
                     onChange={(uri) => {
                       setProofUri(uri);
+                      mutationKeysRef.current.clear();
+                      settlementProofKeyRef.current = undefined;
                       if (error) setError(null);
                     }}
                     variant="rect"

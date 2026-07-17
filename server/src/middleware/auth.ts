@@ -86,20 +86,12 @@ export async function requireAuth(
     onboardingComplete: user.onboardingComplete,
   };
 
-  // Per authenticated user + IP ceiling (Redis sliding window)
+  // Per authenticated user ceiling (Redis sliding window). IP-keyed limits are
+  // avoided here — carrier CGNAT shares public IPs across many drivers.
   await assertRateLimit(
     {
       key: `authed:user:${user.id}`,
       limit: 240,
-      windowSec: 60,
-      failClosed: false,
-    },
-    reply,
-  );
-  await assertRateLimit(
-    {
-      key: `authed:ip:${request.ip}`,
-      limit: 360,
       windowSec: 60,
       failClosed: false,
     },

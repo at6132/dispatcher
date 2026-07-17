@@ -66,7 +66,7 @@ export async function listBalances(): Promise<ListBalancesResult> {
 
 export async function markBalancePaid(
   balanceId: string,
-  opts?: { settlementProofKey?: string },
+  opts?: { settlementProofKey?: string; idempotencyKey?: string },
 ): Promise<BalanceActionResult> {
   const data = await apiFetch<{ balance: BalanceActionResult }>(
     `/v1/balances/${balanceId}/mark-paid`,
@@ -77,6 +77,7 @@ export async function markBalancePaid(
           ? { settlementProofKey: opts.settlementProofKey }
           : {}),
       }),
+      idempotencyKey: opts?.idempotencyKey,
     },
   );
   return data.balance;
@@ -84,12 +85,14 @@ export async function markBalancePaid(
 
 export async function confirmBalanceReceived(
   balanceId: string,
+  opts?: { idempotencyKey?: string },
 ): Promise<BalanceActionResult> {
   const data = await apiFetch<{ balance: BalanceActionResult }>(
     `/v1/balances/${balanceId}/confirm-received`,
     {
       method: 'POST',
       body: JSON.stringify({}),
+      idempotencyKey: opts?.idempotencyKey,
     },
   );
   return data.balance;
@@ -97,7 +100,7 @@ export async function confirmBalanceReceived(
 
 export async function markPlatformFeePaid(
   feeId: string,
-  opts?: { settlementProofKey?: string },
+  opts?: { settlementProofKey?: string; idempotencyKey?: string },
 ): Promise<BalanceActionResult> {
   const data = await apiFetch<{ platformFee: BalanceActionResult }>(
     `/v1/platform-fees/${feeId}/mark-paid`,
@@ -108,6 +111,7 @@ export async function markPlatformFeePaid(
           ? { settlementProofKey: opts.settlementProofKey }
           : {}),
       }),
+      idempotencyKey: opts?.idempotencyKey,
     },
   );
   return data.platformFee;

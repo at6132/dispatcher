@@ -11,6 +11,7 @@ import {
   Alert,
   Animated,
   FlatList,
+  Platform,
   Pressable,
   RefreshControl,
   SectionList,
@@ -34,6 +35,7 @@ import {
   type DriveListItem,
   type DriverAvailability,
 } from '../api/drives';
+import { createIdempotencyKey } from '../api/client';
 import { isApiError, mapApiError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
 import { logger } from '../debug/logger';
@@ -82,6 +84,14 @@ function availabilityTone(status: DriverAvailability) {
     default:
       return colors.muted;
   }
+}
+
+function keyForAction(keys: Map<string, string>, action: string): string {
+  const existing = keys.get(action);
+  if (existing) return existing;
+  const created = createIdempotencyKey();
+  keys.set(action, created);
+  return created;
 }
 
 type BoardState = {
@@ -183,6 +193,7 @@ export function HomeScreen({
   );
   /** Stop 8s offer polling after auth death so we don't spam 401s. */
   const offersPollStoppedRef = useRef(false);
+  const mutationKeysRef = useRef(new Map<string, string>());
 
   const pollOffers = useCallback(async () => {
     if (!user?.id || offersPollStoppedRef.current) return;
@@ -390,16 +401,20 @@ export function HomeScreen({
     extrapolate: 'clamp',
   });
 
-  const onApply = async (driveId: string) => {
+  const onApply = useCallback(async (driveId: string) => {
+    const action = `apply:${driveId}`;
+    const idempotencyKey = keyForAction(mutationKeysRef.current, action);
     setApplyError(null);
     setApplyingId(driveId);
     try {
       const coords = await refreshLocation();
-      await applyToDrive(driveId, coords ?? undefined);
+      await applyToDrive(driveId, coords ?? undefined, { idempotencyKey });
+      mutationKeysRef.current.delete(action);
       setAppliedIds((prev) => new Set(prev).add(driveId));
     } catch (err) {
       const mapped = mapApiError(err);
       if (mapped.code === 'already_applied') {
+        mutationKeysRef.current.delete(action);
         setAppliedIds((prev) => new Set(prev).add(driveId));
       } else {
         setApplyError({ driveId, message: mapped.message });
@@ -408,13 +423,16 @@ export function HomeScreen({
     } finally {
       setApplyingId(null);
     }
-  };
+  }, [refreshLocation]);
 
-  const onPickedUp = async (driveId: string) => {
+  const onPickedUp = useCallback(async (driveId: string) => {
+    const action = `picked-up:${driveId}`;
+    const idempotencyKey = keyForAction(mutationKeysRef.current, action);
     setPickupError(null);
     setPickingUpId(driveId);
     try {
-      const updated = await markDrivePickedUp(driveId);
+      const updated = await markDrivePickedUp(driveId, { idempotencyKey });
+      mutationKeysRef.current.delete(action);
       setBoards((prev) => ({
         ...prev,
         active: {
@@ -429,9 +447,9 @@ export function HomeScreen({
     } finally {
       setPickingUpId(null);
     }
-  };
+  }, []);
 
-  const onRequestCancel = (driveId: string) => {
+  const onRequestCancel = useCallback((driveId: string) => {
     Alert.alert(
       'Cancel this ride?',
       'The dispatcher will get a notification and must approve before the ride is cancelled.',
@@ -442,10 +460,18 @@ export function HomeScreen({
           style: 'destructive',
           onPress: () => {
             void (async () => {
+              const action = `cancel-request:${driveId}`;
+              const idempotencyKey = keyForAction(
+                mutationKeysRef.current,
+                action,
+              );
               setCancelError(null);
               setCancellingId(driveId);
               try {
-                const updated = await requestDriveCancel(driveId);
+                const updated = await requestDriveCancel(driveId, {
+                  idempotencyKey,
+                });
+                mutationKeysRef.current.delete(action);
                 setBoards((prev) => ({
                   ...prev,
                   active: {
@@ -465,7 +491,11 @@ export function HomeScreen({
         },
       ],
     );
-  };
+  }, []);
+
+  const onComplete = useCallback((drive: DriveListItem) => {
+    setCompletingDrive(drive);
+  }, []);
 
   const onDriveCompleted = (driveId: string, updated: Drive) => {
     setCompletingDrive(null);
@@ -521,59 +551,65 @@ export function HomeScreen({
     [boards.history.items],
   );
 
-  const renderDriveCard = (
-    item: DriveListItem,
-    board: DriveBoard,
-    opts?: { showMap?: boolean },
-  ) => {
-    const status = item.viewerApplicationStatus;
-    const applied =
-      appliedIds.has(item.id) ||
-      status === 'pending' ||
-      status === 'accepted';
-    const applyAgain = !applied && status === 'cleared';
-    const canApply =
-      board === 'open' && status !== 'rejected';
-    return (
-      <DriveCard
-        drive={item}
-        board={board}
-        viewerId={user?.id}
-        onApply={canApply ? () => void onApply(item.id) : undefined}
-        onManage={
-          onManageDrive != null &&
-          (board === 'open' ||
-            ((board === 'active' || board === 'history') &&
-              user?.id != null &&
-              item.posterId === user.id))
-            ? () => onManageDrive(item)
-            : undefined
-        }
-        onPickedUp={
-          board === 'active' ? () => void onPickedUp(item.id) : undefined
-        }
-        onComplete={
-          board === 'active' ? () => setCompletingDrive(item) : undefined
-        }
-        onRequestCancel={
-          board === 'active' ? () => onRequestCancel(item.id) : undefined
-        }
-        applying={applyingId === item.id}
-        applied={applied}
-        pickingUp={pickingUpId === item.id}
-        cancelling={cancellingId === item.id}
-        applyError={
-          applyError?.driveId === item.id ? applyError.message : null
-        }
-        applyAgain={applyAgain}
-        showMap={opts?.showMap}
-        onOpenProfile={openProfile}
-        tripNumber={
-          board === 'history' ? historyTripById.get(item.id) : undefined
-        }
-      />
-    );
-  };
+  const renderDriveCard = useCallback(
+    (
+      item: DriveListItem,
+      board: DriveBoard,
+      opts?: { showMap?: boolean },
+    ) => {
+      const status = item.viewerApplicationStatus;
+      const applied =
+        appliedIds.has(item.id) ||
+        status === 'pending' ||
+        status === 'accepted';
+      const applyAgain = !applied && status === 'cleared';
+      return (
+        <DriveCard
+          drive={item}
+          board={board}
+          viewerId={user?.id}
+          onApply={board === 'open' ? onApply : undefined}
+          onManage={
+            onManageDrive != null &&
+            (board === 'open' || board === 'active' || board === 'history')
+              ? onManageDrive
+              : undefined
+          }
+          onPickedUp={board === 'active' ? onPickedUp : undefined}
+          onComplete={board === 'active' ? onComplete : undefined}
+          onRequestCancel={board === 'active' ? onRequestCancel : undefined}
+          applying={applyingId === item.id}
+          applied={applied}
+          pickingUp={pickingUpId === item.id}
+          cancelling={cancellingId === item.id}
+          applyError={
+            applyError?.driveId === item.id ? applyError.message : null
+          }
+          applyAgain={applyAgain}
+          showMap={opts?.showMap}
+          onOpenProfile={openProfile}
+          tripNumber={
+            board === 'history' ? historyTripById.get(item.id) : undefined
+          }
+        />
+      );
+    },
+    [
+      user?.id,
+      onManageDrive,
+      appliedIds,
+      applyingId,
+      pickingUpId,
+      cancellingId,
+      applyError,
+      historyTripById,
+      openProfile,
+      onApply,
+      onPickedUp,
+      onRequestCancel,
+      onComplete,
+    ],
+  );
 
   const listEmpty = (board: (typeof BOARDS)[number], state: BoardState) => (
     <View style={styles.empty}>
@@ -730,6 +766,11 @@ export function HomeScreen({
                   }
                   keyExtractor={(item) => item.id}
                   stickySectionHeadersEnabled={false}
+                  initialNumToRender={10}
+                  windowSize={7}
+                  removeClippedSubviews={
+                    Platform.OS === 'android' ? true : undefined
+                  }
                   contentContainerStyle={[
                     styles.listContent,
                     { paddingBottom: padBottom },
@@ -768,12 +809,17 @@ export function HomeScreen({
                       showMap: section.key === 'dispatched',
                     })
                   }
-                  ItemSeparatorComponent={() => <View style={styles.sep} />}
+                  ItemSeparatorComponent={BoardListSeparator}
                 />
               ) : (
                 <FlatList
                   data={state.items}
                   keyExtractor={(item) => item.id}
+                  initialNumToRender={10}
+                  windowSize={7}
+                  removeClippedSubviews={
+                    Platform.OS === 'android' ? true : undefined
+                  }
                   contentContainerStyle={[
                     styles.listContent,
                     { paddingBottom: padBottom },
@@ -790,7 +836,7 @@ export function HomeScreen({
                     ) : null
                   }
                   renderItem={({ item }) => renderDriveCard(item, b.key)}
-                  ItemSeparatorComponent={() => <View style={styles.sep} />}
+                  ItemSeparatorComponent={BoardListSeparator}
                 />
               )}
             </View>
@@ -988,3 +1034,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: space.xs,
   },
 });
+
+/** Stable FlatList / SectionList separator — avoids remounting on parent re-render. */
+function BoardListSeparator() {
+  return <View style={styles.sep} />;
+}

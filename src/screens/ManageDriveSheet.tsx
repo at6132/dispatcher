@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -25,6 +25,7 @@ import {
   type DriveApplication,
   type DriveListItem,
 } from '../api/drives';
+import { createIdempotencyKey } from '../api/client';
 import { mapApiError } from '../api/errors';
 import {
   favoriteProfile,
@@ -147,6 +148,15 @@ export function ManageDriveSheet({
     'approve' | 'deny' | null
   >(null);
   const [takingDown, setTakingDown] = useState(false);
+  const mutationKeysRef = useRef(new Map<string, string>());
+
+  const getMutationKey = (action: string) => {
+    const existing = mutationKeysRef.current.get(action);
+    if (existing) return existing;
+    const created = createIdempotencyKey();
+    mutationKeysRef.current.set(action, created);
+    return created;
+  };
 
   const fillDetails = useCallback((d: DriveListItem) => {
     setTitle(d.routeText);
@@ -223,87 +233,100 @@ export function ManageDriveSheet({
     }
   }, [visible, drive, tab]);
 
-  const openApplicantProfile = (
-    driver: DriveApplication['driver'],
-  ) => {
-    // Never stack Modals — nested Modal + MapView freezes the app.
-    onClose();
-    setTimeout(() => {
-      openProfile(driver.id, driver);
-    }, 350);
-  };
+  const openApplicantProfile = useCallback(
+    (driver: DriveApplication['driver']) => {
+      // Never stack Modals — nested Modal + MapView freezes the app.
+      onClose();
+      setTimeout(() => {
+        openProfile(driver.id, driver);
+      }, 350);
+    },
+    [onClose, openProfile],
+  );
 
-  const isFavorited = (driverId: string, appFavorited?: boolean) =>
-    Boolean(appFavorited) || localFavIds.has(driverId);
+  const isFavorited = useCallback(
+    (driverId: string, appFavorited?: boolean) =>
+      Boolean(appFavorited) || localFavIds.has(driverId),
+    [localFavIds],
+  );
 
-  const onToggleFavorite = async (
-    driver: DriveApplication['driver'],
-    currentlyFavorited: boolean,
-  ) => {
-    if (!user?.id) return;
-    setFavoritingId(driver.id);
-    setActionError(null);
-    const next = !currentlyFavorited;
-    setLocalFavIds((prev) => {
-      const copy = new Set(prev);
-      if (next) copy.add(driver.id);
-      else copy.delete(driver.id);
-      return copy;
-    });
-    setApps((prev) =>
-      prev.map((a) =>
-        a.driver.id === driver.id ? { ...a, favorited: next } : a,
-      ),
-    );
-    try {
-      await setLocalFavorite(user.id, driver.id, next);
-      await rememberProfiles([{ ...driver, favorited: next }]);
-      if (next) await favoriteProfile(driver.id);
-      else await unfavoriteProfile(driver.id);
-    } catch (err) {
+  const onToggleFavorite = useCallback(
+    async (
+      driver: DriveApplication['driver'],
+      currentlyFavorited: boolean,
+    ) => {
+      if (!user?.id) return;
+      setFavoritingId(driver.id);
+      setActionError(null);
+      const next = !currentlyFavorited;
       setLocalFavIds((prev) => {
         const copy = new Set(prev);
-        if (currentlyFavorited) copy.add(driver.id);
+        if (next) copy.add(driver.id);
         else copy.delete(driver.id);
         return copy;
       });
       setApps((prev) =>
         prev.map((a) =>
-          a.driver.id === driver.id
-            ? { ...a, favorited: currentlyFavorited }
-            : a,
+          a.driver.id === driver.id ? { ...a, favorited: next } : a,
         ),
       );
-      setActionError(mapApiError(err).message);
-    } finally {
-      setFavoritingId(null);
-    }
-  };
+      try {
+        await setLocalFavorite(user.id, driver.id, next);
+        await rememberProfiles([{ ...driver, favorited: next }]);
+        if (next) await favoriteProfile(driver.id);
+        else await unfavoriteProfile(driver.id);
+      } catch (err) {
+        setLocalFavIds((prev) => {
+          const copy = new Set(prev);
+          if (currentlyFavorited) copy.add(driver.id);
+          else copy.delete(driver.id);
+          return copy;
+        });
+        setApps((prev) =>
+          prev.map((a) =>
+            a.driver.id === driver.id
+              ? { ...a, favorited: currentlyFavorited }
+              : a,
+          ),
+        );
+        setActionError(mapApiError(err).message);
+      } finally {
+        setFavoritingId(null);
+      }
+    },
+    [user?.id],
+  );
 
-  const requestClose = () => {
+  const requestClose = useCallback(() => {
     if (saving || acceptingId || clearing || takingDown) return;
     Keyboard.dismiss();
     onClose();
-  };
+  }, [saving, acceptingId, clearing, takingDown, onClose]);
 
-  const onAccept = async (applicationId: string) => {
-    const target = drive ?? active;
-    if (!target) return;
-    setActionError(null);
-    setAcceptingId(applicationId);
-    try {
-      await acceptApplication(target.id, applicationId);
-      onChanged();
-      onClose();
-    } catch (err) {
-      setActionError(mapApiError(err).message);
-      void loadApps(target.id);
-    } finally {
-      setAcceptingId(null);
-    }
-  };
+  const onAccept = useCallback(
+    async (applicationId: string) => {
+      const target = drive ?? active;
+      if (!target) return;
+      const action = `accept:${target.id}:${applicationId}`;
+      const idempotencyKey = getMutationKey(action);
+      setActionError(null);
+      setAcceptingId(applicationId);
+      try {
+        await acceptApplication(target.id, applicationId, { idempotencyKey });
+        mutationKeysRef.current.delete(action);
+        onChanged();
+        onClose();
+      } catch (err) {
+        setActionError(mapApiError(err).message);
+        void loadApps(target.id);
+      } finally {
+        setAcceptingId(null);
+      }
+    },
+    [drive, active, onChanged, onClose, loadApps],
+  );
 
-  const onClearSubmissions = async () => {
+  const onClearSubmissions = useCallback(async () => {
     const target = drive ?? active;
     const clearable = apps.filter(
       (a) => a.status === 'pending' || a.status === 'rejected',
@@ -321,9 +344,9 @@ export function ManageDriveSheet({
     } finally {
       setClearing(false);
     }
-  };
+  }, [drive, active, apps, onChanged, loadApps]);
 
-  const onSaveDetails = async () => {
+  const onSaveDetails = useCallback(async () => {
     const target = drive ?? active;
     if (!target) return;
     setSubmitted(true);
@@ -358,37 +381,56 @@ export function ManageDriveSheet({
     } finally {
       setSaving(false);
     }
-  };
+  }, [
+    drive,
+    active,
+    phone,
+    title,
+    vehicleClass,
+    tripType,
+    seats,
+    address,
+    extraInfo,
+    onChanged,
+  ]);
 
-  const onCancelRespond = async (approve: boolean) => {
-    const target = drive ?? active;
-    if (!target) return;
-    setActionError(null);
-    setCancelResponding(approve ? 'approve' : 'deny');
-    try {
-      const updated = await respondDriveCancel(target.id, approve);
-      setActive((prev) =>
-        prev
-          ? {
-              ...prev,
-              ...updated,
-              poster: prev.poster,
-              assignee: prev.assignee,
-              assigneeLat: prev.assigneeLat,
-              assigneeLng: prev.assigneeLng,
-            }
-          : prev,
-      );
-      onChanged();
-      if (approve) onClose();
-    } catch (err) {
-      setActionError(mapApiError(err).message);
-    } finally {
-      setCancelResponding(null);
-    }
-  };
+  const onCancelRespond = useCallback(
+    async (approve: boolean) => {
+      const target = drive ?? active;
+      if (!target) return;
+      const action = `cancel-respond:${target.id}:${approve}`;
+      const idempotencyKey = getMutationKey(action);
+      setActionError(null);
+      setCancelResponding(approve ? 'approve' : 'deny');
+      try {
+        const updated = await respondDriveCancel(target.id, approve, {
+          idempotencyKey,
+        });
+        mutationKeysRef.current.delete(action);
+        setActive((prev) =>
+          prev
+            ? {
+                ...prev,
+                ...updated,
+                poster: prev.poster,
+                assignee: prev.assignee,
+                assigneeLat: prev.assigneeLat,
+                assigneeLng: prev.assigneeLng,
+              }
+            : prev,
+        );
+        onChanged();
+        if (approve) onClose();
+      } catch (err) {
+        setActionError(mapApiError(err).message);
+      } finally {
+        setCancelResponding(null);
+      }
+    },
+    [drive, active, onChanged, onClose],
+  );
 
-  const onTakeDown = () => {
+  const onTakeDown = useCallback(() => {
     const target = drive ?? active;
     if (!target) return;
     const hasDriver =
@@ -405,10 +447,13 @@ export function ManageDriveSheet({
           style: 'destructive',
           onPress: () => {
             void (async () => {
+              const action = `cancel:${target.id}`;
+              const idempotencyKey = getMutationKey(action);
               setActionError(null);
               setTakingDown(true);
               try {
-                await cancelDrive(target.id);
+                await cancelDrive(target.id, { idempotencyKey });
+                mutationKeysRef.current.delete(action);
                 onChanged();
                 onClose();
               } catch (err) {
@@ -421,7 +466,40 @@ export function ManageDriveSheet({
         },
       ],
     );
-  };
+  }, [drive, active, onChanged, onClose]);
+
+  const onPhoneChange = useCallback((v: string) => {
+    setPhone(formatPhoneDisplay(v));
+  }, []);
+
+  const pendingApps = useMemo(
+    () => apps.filter((a) => a.status === 'pending'),
+    [apps],
+  );
+  const openSubmissions = useMemo(
+    () => apps.filter((a) => a.status === 'pending' || a.status === 'rejected'),
+    [apps],
+  );
+  const acceptedApp = useMemo(
+    () => apps.find((a) => a.status === 'accepted'),
+    [apps],
+  );
+
+  const sheetDrive = drive ?? active;
+
+  const statusCoord = useMemo(() => {
+    if (!sheetDrive) return null;
+    if (sheetDrive.assigneeLat != null && sheetDrive.assigneeLng != null) {
+      return {
+        latitude: sheetDrive.assigneeLat,
+        longitude: sheetDrive.assigneeLng,
+      };
+    }
+    if (acceptedApp?.lat != null && acceptedApp?.lng != null) {
+      return { latitude: acceptedApp.lat, longitude: acceptedApp.lng };
+    }
+    return null;
+  }, [sheetDrive, acceptedApp]);
 
   const titleError =
     submitted && title.trim().length < 2
@@ -439,7 +517,6 @@ export function ManageDriveSheet({
     clearing ||
     cancelResponding != null ||
     takingDown;
-  const sheetDrive = drive ?? active;
 
   if (!sheetDrive || (!visible && !mounted)) return null;
 
@@ -449,12 +526,7 @@ export function ManageDriveSheet({
     sheetDrive.status === 'assigned' ||
     sheetDrive.status === 'picked_up';
   const cancelPending = Boolean(sheetDrive.cancelRequestedAt);
-  const pendingApps = apps.filter((a) => a.status === 'pending');
-  const openSubmissions = apps.filter(
-    (a) => a.status === 'pending' || a.status === 'rejected',
-  );
-  const detailsLocked =
-    !isOpen || openSubmissions.length > 0;
+  const detailsLocked = !isOpen || openSubmissions.length > 0;
   const tabs: { key: ManageTab; label: string }[] = isOpen
     ? [
         { key: 'applicants', label: 'Applicants' },
@@ -465,17 +537,7 @@ export function ManageDriveSheet({
         { key: 'details', label: 'Details' },
       ];
 
-  const acceptedApp = apps.find((a) => a.status === 'accepted');
   const statusDriver = sheetDrive.assignee ?? acceptedApp?.driver;
-  const statusCoord =
-    sheetDrive.assigneeLat != null && sheetDrive.assigneeLng != null
-      ? {
-          latitude: sheetDrive.assigneeLat,
-          longitude: sheetDrive.assigneeLng,
-        }
-      : acceptedApp?.lat != null && acceptedApp?.lng != null
-        ? { latitude: acceptedApp.lat, longitude: acceptedApp.lng }
-        : null;
   const profitCents =
     sheetDrive.status === 'completed' && sheetDrive.costCents != null
       ? Math.round(sheetDrive.costCents * 0.12)
@@ -884,7 +946,7 @@ export function ManageDriveSheet({
                     <TextField
                       label="Customer phone"
                       value={formatPhoneDisplay(phone)}
-                      onChangeText={(v) => setPhone(formatPhoneDisplay(v))}
+                      onChangeText={onPhoneChange}
                       keyboardType="phone-pad"
                       error={phoneError}
                       editable={!busy && !detailsLocked}

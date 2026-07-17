@@ -1,8 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { memo, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Animated,
-  Image,
   Linking,
   Modal,
   Platform,
@@ -11,6 +10,7 @@ import {
   Text,
   View,
 } from 'react-native';
+import { Image } from 'expo-image';
 import { Check } from 'lucide-react-native';
 
 import type {
@@ -42,15 +42,15 @@ export type DriveCardProps = {
   /** Current user — labels “You posted” / “You’re driving”. */
   viewerId?: string;
   /** Open board only — show Apply when the viewer didn’t post this drive. */
-  onApply?: () => void;
+  onApply?: (driveId: string) => void;
   /** Open board only — show Manage when the viewer posted this drive. */
-  onManage?: () => void;
+  onManage?: (drive: DriveListItem) => void;
   /** Active board — mark passenger picked up (assigned → picked_up). */
-  onPickedUp?: () => void;
+  onPickedUp?: (driveId: string) => void;
   /** Active board — complete after pickup (picked_up). */
-  onComplete?: () => void;
+  onComplete?: (drive: DriveListItem) => void;
   /** Active board — assignee requests cancel (needs poster approve). */
-  onRequestCancel?: () => void;
+  onRequestCancel?: (driveId: string) => void;
   /** Open the other party’s full profile. */
   onOpenProfile?: (userId: string) => void;
   applying?: boolean;
@@ -215,7 +215,7 @@ function ChoiceSheet({ visible, title, options, onClose }: ChoiceSheetProps) {
 /**
  * Board listing tile — route-first drive row for Open / Active / History.
  */
-export function DriveCard({
+function DriveCardComponent({
   drive,
   board,
   viewerId,
@@ -266,6 +266,7 @@ export function DriveCard({
   const partyName =
     isPoster && !drive.assignee ? undefined : party?.name?.trim() || 'Driver';
   const photoUri = party?.onboarding?.selfPhotoUri;
+  const photoCacheKey = party?.onboarding?.selfPhotoKey;
   const initial = (partyName ?? 'Y').charAt(0).toUpperCase();
   const mapCoordinate =
     drive.assigneeLat != null && drive.assigneeLng != null
@@ -303,7 +304,10 @@ export function DriveCard({
     .filter(Boolean)
     .join(' · ');
 
-  const showApply = onApply != null && !isPoster;
+  const showApply =
+    onApply != null &&
+    !isPoster &&
+    drive.viewerApplicationStatus !== 'rejected';
   /** Pickup / complete are driver actions — not for rides you dispatched. */
   const showPickedUp =
     onPickedUp != null && drive.status === 'assigned' && isAssignee;
@@ -517,7 +521,15 @@ export function DriveCard({
             >
               <View style={styles.avatar}>
                 {photoUri ? (
-                  <Image source={{ uri: photoUri }} style={styles.avatarImage} />
+                  <Image
+                    source={{
+                      uri: photoUri,
+                      ...(photoCacheKey ? { cacheKey: photoCacheKey } : {}),
+                    }}
+                    style={styles.avatarImage}
+                    contentFit="cover"
+                    cachePolicy="memory-disk"
+                  />
                 ) : (
                   <View style={styles.avatarEmpty}>
                     <Text style={styles.initial}>{initial}</Text>
@@ -544,7 +556,15 @@ export function DriveCard({
             <View style={styles.party}>
               <View style={styles.avatar}>
                 {photoUri ? (
-                  <Image source={{ uri: photoUri }} style={styles.avatarImage} />
+                  <Image
+                    source={{
+                      uri: photoUri,
+                      ...(photoCacheKey ? { cacheKey: photoCacheKey } : {}),
+                    }}
+                    style={styles.avatarImage}
+                    contentFit="cover"
+                    cachePolicy="memory-disk"
+                  />
                 ) : (
                   <View style={styles.avatarEmpty}>
                     <Text style={styles.initial}>{initial}</Text>
@@ -584,7 +604,7 @@ export function DriveCard({
                 accessibilityRole="button"
                 accessibilityLabel="Picked up"
                 disabled={pickingUp || cancelPending}
-                onPress={onPickedUp}
+                onPress={() => onPickedUp?.(drive.id)}
                 onPressIn={() => animatePress(motion.pressScale)}
                 onPressOut={() => animatePress(1)}
                 style={({ pressed }) => [
@@ -610,7 +630,7 @@ export function DriveCard({
                   accessibilityRole="button"
                   accessibilityLabel="Request cancel"
                   disabled={cancelling}
-                  onPress={onRequestCancel}
+                  onPress={() => onRequestCancel?.(drive.id)}
                   style={({ pressed }) => [
                     styles.cancelBtn,
                     cancelling && styles.applyBtnBusy,
@@ -629,7 +649,7 @@ export function DriveCard({
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={manageLabel}
-                onPress={onManage}
+                onPress={() => onManage?.(drive)}
                 style={({ pressed }) => [
                   styles.manageBtn,
                   pressed && styles.manageBtnPressed,
@@ -646,7 +666,7 @@ export function DriveCard({
                 accessibilityRole="button"
                 accessibilityLabel="Complete drive"
                 disabled={cancelPending}
-                onPress={onComplete}
+                onPress={() => onComplete?.(drive)}
                 onPressIn={() => animatePress(motion.pressScale)}
                 onPressOut={() => animatePress(1)}
                 style={({ pressed }) => [
@@ -668,7 +688,7 @@ export function DriveCard({
                   accessibilityRole="button"
                   accessibilityLabel="Request cancel"
                   disabled={cancelling}
-                  onPress={onRequestCancel}
+                  onPress={() => onRequestCancel?.(drive.id)}
                   style={({ pressed }) => [
                     styles.cancelBtn,
                     cancelling && styles.applyBtnBusy,
@@ -687,7 +707,7 @@ export function DriveCard({
               <Pressable
                 accessibilityRole="button"
                 accessibilityLabel={manageLabel}
-                onPress={onManage}
+                onPress={() => onManage?.(drive)}
                 style={({ pressed }) => [
                   styles.manageBtn,
                   pressed && styles.manageBtnPressed,
@@ -702,7 +722,7 @@ export function DriveCard({
             <Pressable
               accessibilityRole="button"
               accessibilityLabel={manageLabel}
-              onPress={onManage}
+              onPress={() => onManage?.(drive)}
               onPressIn={() => animatePress(motion.pressScale)}
               onPressOut={() => animatePress(1)}
               style={({ pressed }) => [
@@ -775,7 +795,7 @@ export function DriveCard({
                 accessibilityRole="button"
                 accessibilityLabel={applyAgain ? 'Apply again' : 'Apply'}
                 disabled={applying}
-                onPress={onApply}
+                onPress={() => onApply?.(drive.id)}
                 onPressIn={() => animatePress(motion.pressScale)}
                 onPressOut={() => animatePress(1)}
                 style={({ pressed }) => [
@@ -835,6 +855,40 @@ export function DriveCard({
     </View>
   );
 }
+
+function driveCardPropsAreEqual(
+  prev: DriveCardProps,
+  next: DriveCardProps,
+): boolean {
+  return (
+    prev.drive.id === next.drive.id &&
+    prev.drive.status === next.drive.status &&
+    prev.drive.viewerApplicationStatus === next.drive.viewerApplicationStatus &&
+    prev.drive.cancelRequestedAt === next.drive.cancelRequestedAt &&
+    prev.drive.poster?.onboarding?.selfPhotoKey ===
+      next.drive.poster?.onboarding?.selfPhotoKey &&
+    prev.drive.assignee?.onboarding?.selfPhotoKey ===
+      next.drive.assignee?.onboarding?.selfPhotoKey &&
+    prev.applying === next.applying &&
+    prev.applied === next.applied &&
+    prev.pickingUp === next.pickingUp &&
+    prev.cancelling === next.cancelling &&
+    prev.applyAgain === next.applyAgain &&
+    prev.applyError === next.applyError &&
+    prev.showMap === next.showMap &&
+    prev.tripNumber === next.tripNumber &&
+    prev.board === next.board &&
+    prev.viewerId === next.viewerId &&
+    prev.onApply === next.onApply &&
+    prev.onManage === next.onManage &&
+    prev.onPickedUp === next.onPickedUp &&
+    prev.onComplete === next.onComplete &&
+    prev.onRequestCancel === next.onRequestCancel &&
+    prev.onOpenProfile === next.onOpenProfile
+  );
+}
+
+export const DriveCard = memo(DriveCardComponent, driveCardPropsAreEqual);
 
 const AVATAR = 36;
 

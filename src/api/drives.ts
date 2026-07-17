@@ -1,6 +1,10 @@
 import type { VehicleClass } from '../auth/types';
 import { apiFetch, ApiError } from './client';
 
+export type MutationOptions = {
+  idempotencyKey?: string;
+};
+
 export type DriveStatus =
   | 'open'
   | 'assigned'
@@ -30,6 +34,10 @@ export type PublicProfile = {
     selfPhotoUri?: string;
     vehicleInteriorUri?: string;
     vehicleExteriorUri?: string;
+    /** Stable S3 object key — use as image cache key (presigned URLs rotate). */
+    selfPhotoKey?: string;
+    vehicleInteriorKey?: string;
+    vehicleExteriorKey?: string;
     yearsDrivingUpstate: number;
     extraInfo?: string;
   };
@@ -167,11 +175,18 @@ function inviteRouteMissing(err: unknown): boolean {
   );
 }
 
-export async function acceptDirectInvite(driveId: string): Promise<Drive> {
+export async function acceptDirectInvite(
+  driveId: string,
+  options?: MutationOptions,
+): Promise<Drive> {
   try {
     const data = await apiFetch<{ drive: Drive }>(
       `/v1/drives/${driveId}/accept-invite`,
-      { method: 'POST', body: JSON.stringify({}) },
+      {
+        method: 'POST',
+        body: JSON.stringify({}),
+        idempotencyKey: options?.idempotencyKey,
+      },
     );
     return data.drive;
   } catch (err) {
@@ -186,11 +201,18 @@ export async function acceptDirectInvite(driveId: string): Promise<Drive> {
   }
 }
 
-export async function declineDirectInvite(driveId: string): Promise<Drive> {
+export async function declineDirectInvite(
+  driveId: string,
+  options?: MutationOptions,
+): Promise<Drive> {
   try {
     const data = await apiFetch<{ drive: Drive }>(
       `/v1/drives/${driveId}/decline-invite`,
-      { method: 'POST', body: JSON.stringify({}) },
+      {
+        method: 'POST',
+        body: JSON.stringify({}),
+        idempotencyKey: options?.idempotencyKey,
+      },
     );
     return data.drive;
   } catch (err) {
@@ -269,18 +291,27 @@ export async function clearApplications(
 export async function acceptApplication(
   driveId: string,
   applicationId: string,
+  options?: MutationOptions,
 ): Promise<Drive> {
   const data = await apiFetch<{ drive: Drive }>(`/v1/drives/${driveId}/accept`, {
     method: 'POST',
     body: JSON.stringify({ applicationId }),
+    idempotencyKey: options?.idempotencyKey,
   });
   return data.drive;
 }
 
-export async function markDrivePickedUp(driveId: string): Promise<Drive> {
+export async function markDrivePickedUp(
+  driveId: string,
+  options?: MutationOptions,
+): Promise<Drive> {
   const data = await apiFetch<{ drive: Drive }>(
     `/v1/drives/${driveId}/picked-up`,
-    { method: 'POST', body: JSON.stringify({}) },
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+      idempotencyKey: options?.idempotencyKey,
+    },
   );
   return data.drive;
 }
@@ -288,6 +319,7 @@ export async function markDrivePickedUp(driveId: string): Promise<Drive> {
 export async function applyToDrive(
   driveId: string,
   coords?: { lat?: number; lng?: number },
+  options?: MutationOptions,
 ): Promise<{ id: string; driveId: string; status: string; createdAt: string }> {
   const data = await apiFetch<{
     application: {
@@ -299,6 +331,7 @@ export async function applyToDrive(
   }>(`/v1/drives/${driveId}/applications`, {
     method: 'POST',
     body: JSON.stringify(coords ?? {}),
+    idempotencyKey: options?.idempotencyKey,
   });
   return data.application;
 }
@@ -311,30 +344,62 @@ export async function completeDrive(
     waitMinutes?: number;
     note?: string;
   },
+  options?: MutationOptions,
 ): Promise<{ drive: Drive; balanceId: string }> {
   return apiFetch<{ drive: Drive; balanceId: string }>(
     `/v1/drives/${driveId}/complete`,
     {
       method: 'POST',
       body: JSON.stringify(input),
+      idempotencyKey: options?.idempotencyKey,
     },
   );
 }
 
 /** Poster takes down a job they posted (leaves the board). */
-export async function cancelDrive(driveId: string): Promise<Drive> {
+export async function cancelDrive(
+  driveId: string,
+  options?: MutationOptions,
+): Promise<Drive> {
   const data = await apiFetch<{ drive: Drive }>(
     `/v1/drives/${driveId}/cancel`,
-    { method: 'POST', body: JSON.stringify({}) },
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+      idempotencyKey: options?.idempotencyKey,
+    },
+  );
+  return data.drive;
+}
+
+/** Poster removes the assigned driver so applicants can reconfirm. */
+export async function unassignDrive(
+  driveId: string,
+  options?: MutationOptions,
+): Promise<Drive> {
+  const data = await apiFetch<{ drive: Drive }>(
+    `/v1/drives/${driveId}/unassign`,
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+      idempotencyKey: options?.idempotencyKey,
+    },
   );
   return data.drive;
 }
 
 /** Assignee requests cancel — poster must approve. */
-export async function requestDriveCancel(driveId: string): Promise<Drive> {
+export async function requestDriveCancel(
+  driveId: string,
+  options?: MutationOptions,
+): Promise<Drive> {
   const data = await apiFetch<{ drive: Drive }>(
     `/v1/drives/${driveId}/cancel-request`,
-    { method: 'POST', body: JSON.stringify({}) },
+    {
+      method: 'POST',
+      body: JSON.stringify({}),
+      idempotencyKey: options?.idempotencyKey,
+    },
   );
   return data.drive;
 }
@@ -343,12 +408,14 @@ export async function requestDriveCancel(driveId: string): Promise<Drive> {
 export async function respondDriveCancel(
   driveId: string,
   approve: boolean,
+  options?: MutationOptions,
 ): Promise<Drive> {
   const data = await apiFetch<{ drive: Drive }>(
     `/v1/drives/${driveId}/cancel-respond`,
     {
       method: 'POST',
       body: JSON.stringify({ approve }),
+      idempotencyKey: options?.idempotencyKey,
     },
   );
   return data.drive;

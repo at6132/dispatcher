@@ -52,6 +52,9 @@ export function telegramAlertsEnabled(): boolean {
   return Boolean(botToken() && chatIds().length > 0);
 }
 
+/** Codes that should text even on 2xx (latency), still subject to noise + dedupe. */
+const LATENCY_ALERT_CODES = new Set(['slow_request', 'slow_route_p95']);
+
 export function shouldTelegramAlert(input: {
   statusCode?: number;
   code?: string;
@@ -60,6 +63,7 @@ export function shouldTelegramAlert(input: {
   if (!telegramAlertsEnabled()) return false;
   if (input.force) return true;
   if (input.code && NOISE_CODES.has(input.code)) return false;
+  if (input.code && LATENCY_ALERT_CODES.has(input.code)) return true;
   const min = env.TELEGRAM_ALERT_MIN_STATUS;
   const status = input.statusCode ?? 500;
   return status >= min;

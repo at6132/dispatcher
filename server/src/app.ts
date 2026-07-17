@@ -7,6 +7,7 @@ import { randomUUID } from 'node:crypto';
 import { env } from './config/env.js';
 import { checkDb } from './db/client.js';
 import { AppError } from './lib/errors.js';
+import { recordLatency } from './lib/latencyStats.js';
 import {
   isQuietPath,
   logDomain,
@@ -167,24 +168,36 @@ export async function buildApp() {
       'http.response',
     );
 
-    if (
-      shouldTelegramAlert({
-        statusCode: reply.statusCode,
-        code: request._alertCode,
-      }) &&
-      !request._telegramAlerted
-    ) {
+    const routePath =
+      request.routeOptions?.url ?? (request.url ?? '').split('?')[0] ?? '';
+    recordLatency(`${request.method} ${routePath}`, ms);
+
+    const isErrorAlert = shouldTelegramAlert({
+      statusCode: reply.statusCode,
+      code: request._alertCode,
+    });
+    const isSlow = ms > env.SLOW_REQUEST_MS;
+    const shouldSlowAlert = isSlow && telegramAlertsEnabled();
+    if ((isErrorAlert || shouldSlowAlert) && !request._telegramAlerted) {
       request._telegramAlerted = true;
+      const title =
+        isErrorAlert && isSlow
+          ? 'HTTP 5xx + slow request'
+          : isErrorAlert
+            ? 'HTTP 5xx response'
+            : 'Slow request';
       notifyTelegram({
-        title: 'HTTP 5xx response',
+        title,
         statusCode: reply.statusCode,
-        code: request._alertCode,
+        code: isErrorAlert ? request._alertCode : 'slow_request',
         requestId: request.id,
         path: (request.url ?? '').split('?')[0],
         method: request.method,
         userId: shortId(request.user?.id),
-        error: request._alertError,
-        details: { ms },
+        error: isErrorAlert ? request._alertError : undefined,
+        details: isSlow
+          ? { ms, thresholdMs: env.SLOW_REQUEST_MS }
+          : { ms },
       });
     }
   });
@@ -211,11 +224,13 @@ export async function buildApp() {
           : false,
     });
 
-    const allowedOrigins = (process.env.CORS_ORIGINS ?? '')
+    const allowedOrigins = (env.CORS_ORIGINS ?? '')
       .split(',')
       .map((s: string) => s.trim())
       .filter(Boolean);
     await app.register(cors, {
+      // When allowlisted: browsers must match; requests with no Origin
+      // (native Expo / curl) still pass — mobile drivers are unaffected.
       origin: allowedOrigins.length
         ? (origin, cb) => {
             if (!origin || allowedOrigins.includes(origin)) {
@@ -230,7 +245,10 @@ export async function buildApp() {
 
     await app.register(rateLimit, {
       global: true,
-      max: 180,
+      // Pre-auth outer DoS backstop — keyed on IP only (no user yet). Ceiling
+      // is high enough that carrier CGNAT / shared public IPs don't starve
+      // legitimate drivers; per-user limits live in requireAuth.
+      max: 400,
       timeWindow: '1 minute',
       nameSpace: 'rl-global:',
       allowList: (req) => isQuietPath(req.url),
@@ -346,6 +364,7 @@ export async function buildApp() {
     s3Enabled: env.s3Enabled,
     telegramAlerts: telegramAlertsEnabled(),
     adminEnabled: env.adminEnabled,
+    slowRequestThresholdMs: env.SLOW_REQUEST_MS,
     logLevel:
       env.LOG_LEVEL ?? (env.NODE_ENV === 'production' ? 'info' : 'debug'),
   });

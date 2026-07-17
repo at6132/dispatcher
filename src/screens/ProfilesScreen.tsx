@@ -238,10 +238,6 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
           <Text style={styles.titleLead}>Your </Text>
           <Text style={styles.titleItalic}>people</Text>
         </Text>
-        <Text style={styles.support}>
-          Favorites are drivers you trust. Open All to browse, tap the heart to
-          save them, then send a job directly from their profile.
-        </Text>
       </View>
 
       <View style={styles.tabs} accessibilityRole="tablist">
@@ -446,12 +442,6 @@ const styles = StyleSheet.create({
   titleItalic: {
     ...type.heroItalic,
     color: colors.ink,
-  },
-  support: {
-    ...type.body,
-    fontFamily: fonts.sans,
-    color: colors.inkSoft,
-    maxWidth: 340,
   },
   tabs: {
     flexDirection: 'row',

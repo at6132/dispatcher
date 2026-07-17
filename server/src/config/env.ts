@@ -38,12 +38,19 @@ const envSchema = z.object({
   TELEGRAM_CHAT_IDS: z.string().optional(),
   /** Min HTTP status that triggers a text (default 500; set 400 to include client errors) */
   TELEGRAM_ALERT_MIN_STATUS: z.coerce.number().int().default(500),
+  /** Global slow-request threshold (ms); per-route overrides can come later */
+  SLOW_REQUEST_MS: z.coerce.number().int().positive().default(1500),
   /** Ops admin console password (Telegram /allow still required) */
-  ADMIN_PASSWORD: z.string().min(4).optional(),
+  ADMIN_PASSWORD: z.string().min(12).optional(),
   /** Dedicated JWT secret for admin sessions (min 32). Falls back to JWT_ACCESS_SECRET in dev only. */
   ADMIN_JWT_SECRET: z.string().min(32).optional(),
   ADMIN_SESSION_TTL_SEC: z.coerce.number().int().positive().default(3600),
   ADMIN_CHALLENGE_TTL_SEC: z.coerce.number().int().positive().default(300),
+  /**
+   * Comma-separated browser origins for CORS. Required in production (admin_app).
+   * Native Expo clients do not send Origin and are unaffected by this allowlist.
+   */
+  CORS_ORIGINS: z.string().optional(),
   /** Optional PostHog project key — mirrors analytics events when set */
   POSTHOG_API_KEY: z.string().optional(),
   POSTHOG_HOST: z.string().url().optional(),
@@ -86,6 +93,14 @@ function loadEnv(): Env {
   if (adminEnabled && data.NODE_ENV === 'production' && !data.ADMIN_JWT_SECRET) {
     throw new Error(
       'Invalid environment: ADMIN_JWT_SECRET is required in production when ADMIN_PASSWORD is set',
+    );
+  }
+  if (
+    data.NODE_ENV === 'production' &&
+    !(data.CORS_ORIGINS ?? '').trim()
+  ) {
+    throw new Error(
+      'CORS_ORIGINS is required in production — set it even if only the mobile client uses this API, since admin_app is browser-based and needs an explicit allowlist',
     );
   }
   return {

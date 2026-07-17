@@ -12,6 +12,7 @@ import {
 } from 'react-native';
 
 import { completeDrive, type DriveListItem } from '../../api/drives';
+import { createIdempotencyKey } from '../../api/client';
 import { mapApiError } from '../../api/errors';
 import { colors, fonts, motion, radius, space, tripRouteColor, type } from '../../theme';
 import { Button } from './Button';
@@ -52,9 +53,11 @@ export function CompleteDriveModal({
   const successOpacity = useRef(new Animated.Value(0)).current;
   const successScale = useRef(new Animated.Value(0.72)).current;
   const formOpacity = useRef(new Animated.Value(1)).current;
+  const mutationKeyRef = useRef<{ action: string; key: string } | null>(null);
 
   useEffect(() => {
     if (!visible) return;
+    mutationKeyRef.current = null;
     setProfit('');
     setError(null);
     setSubmitting(false);
@@ -77,7 +80,7 @@ export function CompleteDriveModal({
         useNativeDriver: true,
       }),
     ]).start();
-  }, [visible, cardOpacity, cardScale, formOpacity, successOpacity, successScale]);
+  }, [visible, drive?.id, cardOpacity, cardScale, formOpacity, successOpacity, successScale]);
 
   const dismiss = () => {
     if (submitting || doneCents != null) return;
@@ -138,8 +141,17 @@ export function CompleteDriveModal({
     setError(null);
     setSubmitting(true);
     Keyboard.dismiss();
+    const action = `complete:${drive.id}:${cents}`;
+    if (mutationKeyRef.current?.action !== action) {
+      mutationKeyRef.current = { action, key: createIdempotencyKey() };
+    }
     try {
-      const result = await completeDrive(drive.id, { costCents: cents });
+      const result = await completeDrive(
+        drive.id,
+        { costCents: cents },
+        { idempotencyKey: mutationKeyRef.current.key },
+      );
+      mutationKeyRef.current = null;
       playSuccessThenFinish(drive.id, cents, result.drive);
     } catch (err) {
       setError(mapApiError(err).message);

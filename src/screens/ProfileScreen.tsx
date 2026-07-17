@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
   Image,
@@ -122,7 +122,7 @@ export function ProfileScreen() {
   const [notifSaving, setNotifSaving] = useState(false);
   const [notifError, setNotifError] = useState<string | null>(null);
 
-  const syncFromUser = () => {
+  const syncFromUser = useCallback(() => {
     if (!user) return;
     const ob = user.onboarding;
     setName(user.name);
@@ -139,7 +139,7 @@ export function ProfileScreen() {
     setSubmitted(false);
     setSaving(false);
     setFormError(null);
-  };
+  }, [user]);
 
   useEffect(() => {
     setEditing(false);
@@ -186,19 +186,19 @@ export function ProfileScreen() {
     };
   }, [user?.id]);
 
-  const startEdit = () => {
+  const startEdit = useCallback(() => {
     setSettingsOpen(false);
     syncFromUser();
     setEditing(true);
-  };
+  }, [syncFromUser]);
 
-  const cancelEdit = () => {
+  const cancelEdit = useCallback(() => {
     Keyboard.dismiss();
     syncFromUser();
     setEditing(false);
-  };
+  }, [syncFromUser]);
 
-  const openSettings = () => {
+  const openSettings = useCallback(() => {
     Keyboard.dismiss();
     setEditing(false);
     setSettingsOpen(true);
@@ -214,13 +214,13 @@ export function ProfileScreen() {
       .finally(() => {
         setNotifLoading(false);
       });
-  };
+  }, []);
 
-  const closeSettings = () => {
+  const closeSettings = useCallback(() => {
     setSettingsOpen(false);
-  };
+  }, []);
 
-  const onSignOut = () => {
+  const onSignOut = useCallback(() => {
     Alert.alert('Sign out?', 'You’ll need your phone and password to sign back in.', [
       { text: 'Cancel', style: 'cancel' },
       {
@@ -240,9 +240,9 @@ export function ProfileScreen() {
         },
       },
     ]);
-  };
+  }, [signOut]);
 
-  const onDeleteAccount = () => {
+  const onDeleteAccount = useCallback(() => {
     Alert.alert(
       'Delete account?',
       'This permanently removes your profile, posts, and applications. Open balances must be settled first. This can’t be undone.',
@@ -279,38 +279,89 @@ export function ProfileScreen() {
         },
       ],
     );
-  };
+  }, [deleteAccount]);
 
-  const patchNotifPref = async <K extends keyof NotificationPrefs>(
-    key: K,
-    value: NotificationPrefs[K],
-  ) => {
-    const prev = notifPrefs;
-    const next = { ...prev, [key]: value };
-    setNotifPrefs(next);
-    setNotifError(null);
-    setNotifSaving(true);
-    try {
-      const saved = await updateNotificationPrefs({ [key]: value });
-      setNotifPrefs(normalizeNotificationPrefs(saved));
-    } catch (err) {
-      setNotifPrefs(prev);
-      setNotifError(mapApiError(err).message);
-    } finally {
-      setNotifSaving(false);
-    }
-  };
+  const patchNotifPref = useCallback(
+    async <K extends keyof NotificationPrefs>(
+      key: K,
+      value: NotificationPrefs[K],
+    ) => {
+      const prev = notifPrefs;
+      const next = { ...prev, [key]: value };
+      setNotifPrefs(next);
+      setNotifError(null);
+      setNotifSaving(true);
+      try {
+        const saved = await updateNotificationPrefs({ [key]: value });
+        setNotifPrefs(normalizeNotificationPrefs(saved));
+      } catch (err) {
+        setNotifPrefs(prev);
+        setNotifError(mapApiError(err).message);
+      } finally {
+        setNotifSaving(false);
+      }
+    },
+    [notifPrefs],
+  );
+
+  const onNewApplicationChange = useCallback(
+    (v: NotificationPrefMode) => {
+      void patchNotifPref('newApplication', v);
+    },
+    [patchNotifPref],
+  );
+  const onDriveStatusChange = useCallback(
+    (v: DriveStatusPrefMode) => {
+      void patchNotifPref('driveStatus', v);
+    },
+    [patchNotifPref],
+  );
+  const onCancelRequestChange = useCallback(
+    (v: NotificationPrefMode) => {
+      void patchNotifPref('cancelRequest', v);
+    },
+    [patchNotifPref],
+  );
+  const onApplicationAcceptedChange = useCallback(
+    (v: NotificationPrefMode) => {
+      void patchNotifPref('applicationAccepted', v);
+    },
+    [patchNotifPref],
+  );
+  const onApplicationClearedChange = useCallback(
+    (v: NotificationPrefMode) => {
+      void patchNotifPref('applicationCleared', v);
+    },
+    [patchNotifPref],
+  );
+  const onNewDrivePostedChange = useCallback(
+    (v: NotificationPrefMode) => {
+      void patchNotifPref('newDrivePosted', v);
+    },
+    [patchNotifPref],
+  );
 
   const nameError = submitted ? validateName(name) : undefined;
-  const vehicleErrors = submitted
-    ? validateOnboardingVehicle({ vehicleClass, vehicleType, seats })
-    : {};
-  const experienceErrors = submitted
-    ? validateOnboardingExperience({ yearsDrivingUpstate: years })
-    : {};
-  const zelleErrors = submitted ? validateOnboardingZelle({ zelle }) : {};
+  const vehicleErrors = useMemo(
+    () =>
+      submitted
+        ? validateOnboardingVehicle({ vehicleClass, vehicleType, seats })
+        : {},
+    [submitted, vehicleClass, vehicleType, seats],
+  );
+  const experienceErrors = useMemo(
+    () =>
+      submitted
+        ? validateOnboardingExperience({ yearsDrivingUpstate: years })
+        : {},
+    [submitted, years],
+  );
+  const zelleErrors = useMemo(
+    () => (submitted ? validateOnboardingZelle({ zelle }) : {}),
+    [submitted, zelle],
+  );
 
-  const onSave = async () => {
+  const onSave = useCallback(async () => {
     setSubmitted(true);
     setFormError(null);
     Keyboard.dismiss();
@@ -352,16 +403,31 @@ export function ProfileScreen() {
     } finally {
       setSaving(false);
     }
-  };
+  }, [
+    name,
+    vehicleClass,
+    vehicleType,
+    seats,
+    years,
+    extraInfo,
+    zelle,
+    selfPhotoUri,
+    interiorUri,
+    exteriorUri,
+    updateProfile,
+  ]);
 
   const ob = user?.onboarding;
-  const detailParts: string[] = [];
-  if (ob?.seats != null) detailParts.push(`${ob.seats} seats`);
-  if (ob?.yearsDrivingUpstate != null) {
-    detailParts.push(`${ob.yearsDrivingUpstate} yrs upstate`);
-  }
-  const classLabel = vehicleClassLabel(ob?.vehicleClass);
-  if (classLabel) detailParts.push(classLabel);
+  const driverDetail = useMemo(() => {
+    const parts: string[] = [];
+    if (ob?.seats != null) parts.push(`${ob.seats} seats`);
+    if (ob?.yearsDrivingUpstate != null) {
+      parts.push(`${ob.yearsDrivingUpstate} yrs upstate`);
+    }
+    const classLabel = vehicleClassLabel(ob?.vehicleClass);
+    if (classLabel) parts.push(classLabel);
+    return parts.length ? parts.join(' · ') : undefined;
+  }, [ob?.seats, ob?.yearsDrivingUpstate, ob?.vehicleClass]);
 
   const showBack = editing || settingsOpen;
 
@@ -459,9 +525,7 @@ export function ProfileScreen() {
                           label="New applications"
                           options={PREF_OPTIONS}
                           value={notifPrefs.newApplication}
-                          onChange={(v) =>
-                            void patchNotifPref('newApplication', v)
-                          }
+                          onChange={onNewApplicationChange}
                         />
                         <Text style={styles.notifHint}>
                           Favorites only = favorited drivers who apply.
@@ -470,9 +534,7 @@ export function ProfileScreen() {
                           label="Ride status changes"
                           options={DRIVE_STATUS_OPTIONS}
                           value={notifPrefs.driveStatus}
-                          onChange={(v) =>
-                            void patchNotifPref('driveStatus', v)
-                          }
+                          onChange={onDriveStatusChange}
                         />
                         <Text style={styles.notifHint}>
                           Picked up, completed, or cancelled.
@@ -481,9 +543,7 @@ export function ProfileScreen() {
                           label="Cancel requests"
                           options={PREF_OPTIONS}
                           value={notifPrefs.cancelRequest}
-                          onChange={(v) =>
-                            void patchNotifPref('cancelRequest', v)
-                          }
+                          onChange={onCancelRequestChange}
                         />
                         <Text style={styles.notifHint}>
                           When a driver asks to cancel. Favorites only =
@@ -503,9 +563,7 @@ export function ProfileScreen() {
                           label="You got the job"
                           options={PREF_OPTIONS}
                           value={notifPrefs.applicationAccepted}
-                          onChange={(v) =>
-                            void patchNotifPref('applicationAccepted', v)
-                          }
+                          onChange={onApplicationAcceptedChange}
                         />
                         <Text style={styles.notifHint}>
                           Favorites only = favorited dispatchers.
@@ -514,9 +572,7 @@ export function ProfileScreen() {
                           label="Applications cleared"
                           options={PREF_OPTIONS}
                           value={notifPrefs.applicationCleared}
-                          onChange={(v) =>
-                            void patchNotifPref('applicationCleared', v)
-                          }
+                          onChange={onApplicationClearedChange}
                         />
                         <Text style={styles.notifHint}>
                           When a dispatcher clears applications on a post you
@@ -526,9 +582,7 @@ export function ProfileScreen() {
                           label="New drives posted"
                           options={PREF_OPTIONS}
                           value={notifPrefs.newDrivePosted}
-                          onChange={(v) =>
-                            void patchNotifPref('newDrivePosted', v)
-                          }
+                          onChange={onNewDrivePostedChange}
                         />
                         <Text style={styles.notifHint}>
                           Any new board post. Favorites = favorited
@@ -602,7 +656,7 @@ export function ProfileScreen() {
                         ? formatPhoneDisplay(user.phone)
                         : undefined
                     }
-                    detail={detailParts.join(' · ') || undefined}
+                    detail={driverDetail}
                     notes={ob?.extraInfo}
                     showMap={false}
                   />

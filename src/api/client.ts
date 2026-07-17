@@ -1,7 +1,11 @@
+import * as Crypto from 'expo-crypto';
+
 import { logger, newRequestId } from '../debug/logger';
 import { clearTokens, getAccessToken, getRefreshToken, setTokens } from './tokenStore';
 
 const API_URL = (process.env.EXPO_PUBLIC_API_URL ?? '').replace(/\/$/, '');
+export const API_REQUEST_TIMEOUT_MS = 15_000;
+const GET_NETWORK_RETRY_DELAY_MS = 750;
 
 export class ApiError extends Error {
   constructor(
@@ -23,6 +27,22 @@ type TokenResponse = {
 };
 
 let refreshInFlight: Promise<boolean> | null = null;
+
+export type ApiFetchInit = RequestInit & {
+  auth?: boolean;
+  retry?: boolean;
+  networkRetry?: boolean;
+  idempotencyKey?: string;
+  timeoutMs?: number;
+};
+
+export function createIdempotencyKey(): string {
+  return Crypto.randomUUID();
+}
+
+function wait(ms: number): Promise<void> {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 async function refreshSession(): Promise<boolean> {
   if (!API_URL) return false;
@@ -72,7 +92,7 @@ async function refreshSession(): Promise<boolean> {
 
 export async function apiFetch<T>(
   path: string,
-  init: RequestInit & { auth?: boolean; retry?: boolean } = {},
+  init: ApiFetchInit = {},
 ): Promise<T> {
   if (!API_URL) {
     logger.error('api', 'no_api_url', { path });
@@ -92,6 +112,14 @@ export async function apiFetch<T>(
   if (init.body && !headers.has('Content-Type')) {
     headers.set('Content-Type', 'application/json');
   }
+  let idempotencyKey = init.idempotencyKey;
+  if (method !== 'GET' && method !== 'HEAD') {
+    idempotencyKey =
+      headers.get('Idempotency-Key') ??
+      idempotencyKey ??
+      createIdempotencyKey();
+    headers.set('Idempotency-Key', idempotencyKey);
+  }
   headers.set('X-Request-Id', requestId);
 
   if (init.auth !== false) {
@@ -109,8 +137,23 @@ export async function apiFetch<T>(
   });
 
   let res: Response;
+  const controller = new AbortController();
+  const abortFromCaller = () => controller.abort();
+  if (init.signal?.aborted) {
+    controller.abort();
+  } else {
+    init.signal?.addEventListener('abort', abortFromCaller, { once: true });
+  }
+  const timeout = setTimeout(
+    () => controller.abort(),
+    init.timeoutMs ?? API_REQUEST_TIMEOUT_MS,
+  );
   try {
-    res = await fetch(`${API_URL}${path}`, { ...init, headers });
+    res = await fetch(`${API_URL}${path}`, {
+      ...init,
+      headers,
+      signal: controller.signal,
+    });
   } catch (err) {
     logger.error('api', 'network_error', {
       requestId,
@@ -119,12 +162,25 @@ export async function apiFetch<T>(
       ms: Date.now() - started,
       err: err instanceof Error ? err.message : String(err),
     });
-    throw new ApiError(
+    const networkError = new ApiError(
       'Can’t reach the server. Check your connection and try again.',
       0,
       'network_error',
       requestId,
     );
+    if (method === 'GET' && init.networkRetry !== false) {
+      logger.info('api', 'get_network_retry', {
+        requestId,
+        path,
+        delayMs: GET_NETWORK_RETRY_DELAY_MS,
+      });
+      await wait(GET_NETWORK_RETRY_DELAY_MS);
+      return apiFetch<T>(path, { ...init, networkRetry: false });
+    }
+    throw networkError;
+  } finally {
+    clearTimeout(timeout);
+    init.signal?.removeEventListener('abort', abortFromCaller);
   }
 
   const serverRequestId = res.headers.get('x-request-id') ?? requestId;
@@ -143,7 +199,11 @@ export async function apiFetch<T>(
     }
     const ok = await refreshInFlight;
     if (ok) {
-      return apiFetch<T>(path, { ...init, retry: false });
+      return apiFetch<T>(path, {
+        ...init,
+        retry: false,
+        ...(idempotencyKey ? { idempotencyKey } : {}),
+      });
     }
     // Refresh failed or missing — tokens cleared; surface 401 without another retry.
     logger.warn('api', 'unauthorized_session_cleared', {

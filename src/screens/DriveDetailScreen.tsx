@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
@@ -17,6 +17,7 @@ import {
   type Drive,
   type PublicProfile,
 } from '../api/drives';
+import { createIdempotencyKey } from '../api/client';
 import { getProfile } from '../api/profiles';
 import { mapApiError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
@@ -57,6 +58,7 @@ export function DriveDetailScreen({
   onBack,
   onChanged,
 }: DriveDetailScreenProps) {
+  const mutationKeysRef = useRef(new Map<string, string>());
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { refreshLocation } = useDriverLocation();
@@ -111,16 +113,22 @@ export function DriveDetailScreen({
 
   const onApply = async () => {
     if (!drive || applying) return;
+    const action = `apply:${drive.id}`;
+    const idempotencyKey =
+      mutationKeysRef.current.get(action) ?? createIdempotencyKey();
+    mutationKeysRef.current.set(action, idempotencyKey);
     setActionError(null);
     setApplying(true);
     try {
       const coords = await refreshLocation();
-      await applyToDrive(drive.id, coords ?? undefined);
+      await applyToDrive(drive.id, coords ?? undefined, { idempotencyKey });
+      mutationKeysRef.current.delete(action);
       await load();
       onChanged?.();
     } catch (err) {
       const mapped = mapApiError(err);
       if (mapped.code === 'already_applied') {
+        mutationKeysRef.current.delete(action);
         await load();
         onChanged?.();
       } else {
@@ -141,10 +149,15 @@ export function DriveDetailScreen({
       return;
     }
     const costCents = Math.round(dollars * 100);
+    const action = `complete:${drive.id}:${costCents}`;
+    const idempotencyKey =
+      mutationKeysRef.current.get(action) ?? createIdempotencyKey();
+    mutationKeysRef.current.set(action, idempotencyKey);
     setActionError(null);
     setCompleting(true);
     try {
-      await completeDrive(drive.id, { costCents });
+      await completeDrive(drive.id, { costCents }, { idempotencyKey });
+      mutationKeysRef.current.delete(action);
       await load();
       onChanged?.();
     } catch (err) {

@@ -32,6 +32,11 @@ let pollCount = 0;
 let commandCount = 0;
 
 const POLL_LOCK = 'worker:telegram-admin-poll';
+const LAST_ERROR_MAX = 200;
+
+function setLastError(msg: string | null): void {
+  lastError = msg == null ? null : msg.slice(0, LAST_ERROR_MAX);
+}
 
 export function getTelegramAdminWorkerDebug() {
   return {
@@ -163,7 +168,7 @@ async function pollOnce(log?: FastifyBaseLogger): Promise<void> {
 
   if (!res.ok) {
     const body = await res.text().catch(() => '');
-    lastError = `poll_fail status=${res.status} ${body.slice(0, 160)}`;
+    setLastError(`poll_fail status=${res.status} ${body.slice(0, 160)}`);
     log?.warn(
       {
         event: 'worker.telegram_admin.poll_fail',
@@ -181,7 +186,7 @@ async function pollOnce(log?: FastifyBaseLogger): Promise<void> {
     description?: string;
   };
   if (!data.ok) {
-    lastError = `getUpdates not ok: ${data.description ?? 'unknown'}`;
+    setLastError(`getUpdates not ok: ${data.description ?? 'unknown'}`);
     log?.warn(
       { event: 'worker.telegram_admin.poll_not_ok', data },
       'worker.telegram_admin.poll_not_ok',
@@ -205,7 +210,7 @@ async function pollOnce(log?: FastifyBaseLogger): Promise<void> {
     if (!msg?.text) continue;
     const chatId = String(msg.chat.id);
     if (!isApprovedTelegramChat(chatId)) {
-      lastError = `unauthorized chat ${chatId}`;
+      setLastError(`unauthorized chat ${chatId}`);
       log?.warn(
         {
           event: 'worker.telegram_admin.unauthorized_chat',
@@ -224,9 +229,9 @@ async function pollOnce(log?: FastifyBaseLogger): Promise<void> {
     }
     try {
       await handleTelegramAdminCommand(chatId, msg.text, log);
-      lastError = null;
+      setLastError(null);
     } catch (err) {
-      lastError = err instanceof Error ? err.message : String(err);
+      setLastError(err instanceof Error ? err.message : String(err));
       log?.error(
         {
           event: 'worker.telegram_admin.handle_fail',
@@ -239,7 +244,7 @@ async function pollOnce(log?: FastifyBaseLogger): Promise<void> {
       );
       await sendTelegramPlain(
         chatId,
-        `Admin command failed: ${lastError.slice(0, 180)}. Try again.`,
+        `Admin command failed: ${(lastError ?? 'unknown').slice(0, 180)}. Try again.`,
       );
     }
   }
@@ -271,7 +276,7 @@ export function startTelegramAdminWorker(
         // usually waits; this guards empty/fast paths too).
         await new Promise((r) => setTimeout(r, 500));
       } catch (err) {
-        lastError = err instanceof Error ? err.message : String(err);
+        setLastError(err instanceof Error ? err.message : String(err));
         log?.error(
           {
             event: 'worker.telegram_admin.loop_fail',
