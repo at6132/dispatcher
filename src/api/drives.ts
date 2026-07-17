@@ -83,7 +83,7 @@ export type CreateDriveInput = {
 export type DriveListItem = Drive & {
   poster: PublicProfile;
   assignee?: PublicProfile;
-  /** Accepted driver location from apply (for posted/active map). */
+  /** Current available-driver location, or their accepted apply-time fix. */
   assigneeLat?: number;
   assigneeLng?: number;
 };
@@ -243,6 +243,8 @@ export type DriveApplication = {
   /** True when the poster favorited this applicant. */
   isFavorite?: boolean;
   favorited?: boolean;
+  /** Applicant is still finishing another ride (picked_up) — applied mid-job. */
+  midJob?: boolean;
   driver: PublicProfile & { phone?: string };
 };
 
@@ -317,6 +319,15 @@ export async function completeDrive(
       body: JSON.stringify(input),
     },
   );
+}
+
+/** Poster takes down a job they posted (leaves the board). */
+export async function cancelDrive(driveId: string): Promise<Drive> {
+  const data = await apiFetch<{ drive: Drive }>(
+    `/v1/drives/${driveId}/cancel`,
+    { method: 'POST', body: JSON.stringify({}) },
+  );
+  return data.drive;
 }
 
 /** Assignee requests cancel — poster must approve. */

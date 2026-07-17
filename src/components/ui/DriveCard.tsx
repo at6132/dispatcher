@@ -11,9 +11,7 @@ import {
   Text,
   View,
 } from 'react-native';
-import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
-import { useSafeAreaInsets } from 'react-native-safe-area-context';
-import { Check, X } from 'lucide-react-native';
+import { Check } from 'lucide-react-native';
 
 import type {
   DriveBoard,
@@ -35,6 +33,7 @@ import {
   type,
 } from '../../theme';
 import { Icon } from './Icon';
+import { MapPreview } from './MapExpand';
 
 export type DriveCardProps = {
   drive: DriveListItem;
@@ -58,6 +57,8 @@ export type DriveCardProps = {
   applied?: boolean;
   pickingUp?: boolean;
   cancelling?: boolean;
+  /** Shown under Apply when the last attempt failed (e.g. mid-job). */
+  applyError?: string | null;
   /** After poster clears submissions — CTA label becomes Apply again. */
   applyAgain?: boolean;
   /** Dispatched section — map of driver apply location + status chip. */
@@ -70,8 +71,6 @@ export type DriveCardProps = {
 };
 
 const MAP_HEIGHT = 132;
-const MAP_DELTA = 0.02;
-const MAP_EXPANDED_DELTA = 0.035;
 
 function statusLabel(status: DriveStatus): string {
   switch (status) {
@@ -230,12 +229,11 @@ export function DriveCard({
   applied = false,
   pickingUp = false,
   cancelling = false,
+  applyError = null,
   applyAgain = false,
   showMap = false,
   tripNumber,
 }: DriveCardProps) {
-  const insets = useSafeAreaInsets();
-  const [mapExpanded, setMapExpanded] = useState(false);
   const [phoneSheetOpen, setPhoneSheetOpen] = useState(false);
   const [mapsSheetOpen, setMapsSheetOpen] = useState(false);
   const routeColor = tripRouteColor(drive.status, board);
@@ -409,7 +407,7 @@ export function DriveCard({
     }).start();
   };
 
-  const statusBadge = (placement: 'inline' | 'onMap' | 'sheet' = 'inline') => (
+  const statusBadge = (placement: 'inline' | 'onMap' = 'inline') => (
     <View
       style={[
         styles.badge,
@@ -418,7 +416,6 @@ export function DriveCard({
         drive.status === 'picked_up' && styles.badgePickedUp,
         drive.status === 'completed' && styles.badgeCompleted,
         placement === 'onMap' && styles.badgeOnMap,
-        placement === 'sheet' && styles.badgeOnSheet,
       ]}
     >
       <Text
@@ -428,8 +425,7 @@ export function DriveCard({
           drive.status === 'assigned' && styles.badgeLabelAssigned,
           drive.status === 'picked_up' && styles.badgeLabelPickedUp,
           drive.status === 'completed' && styles.badgeLabelCompleted,
-          (placement === 'onMap' || placement === 'sheet') &&
-            styles.badgeLabelLifted,
+          placement === 'onMap' && styles.badgeLabelLifted,
         ]}
       >
         {status}
@@ -444,111 +440,14 @@ export function DriveCard({
       accessibilityLabel={`${drive.routeText}, ${status}`}
     >
       {showMap ? (
-        <Pressable
-          style={styles.mapWrap}
-          accessibilityRole="button"
-          accessibilityLabel={
-            mapCoordinate
-              ? `Expand map, ${status}`
-              : 'Driver location unavailable'
-          }
-          disabled={!mapCoordinate}
-          onPress={() => setMapExpanded(true)}
-        >
-          {mapCoordinate ? (
-            <MapView
-              style={styles.map}
-              provider={PROVIDER_DEFAULT}
-              pointerEvents="none"
-              scrollEnabled={false}
-              zoomEnabled={false}
-              rotateEnabled={false}
-              pitchEnabled={false}
-              toolbarEnabled={false}
-              showsCompass={false}
-              showsPointsOfInterest={false}
-              initialRegion={{
-                latitude: mapCoordinate.latitude,
-                longitude: mapCoordinate.longitude,
-                latitudeDelta: MAP_DELTA,
-                longitudeDelta: MAP_DELTA,
-              }}
-            >
-              <Marker coordinate={mapCoordinate} />
-            </MapView>
-          ) : (
-            <View style={styles.mapEmpty}>
-              <Text style={styles.mapEmptyText}>Waiting for location</Text>
-            </View>
-          )}
-          {statusBadge('onMap')}
-        </Pressable>
-      ) : null}
-
-      {showMap && mapCoordinate ? (
-        <Modal
-          visible={mapExpanded}
-          animationType="fade"
-          presentationStyle="fullScreen"
-          onRequestClose={() => setMapExpanded(false)}
-        >
-          <View style={styles.mapModal}>
-            <MapView
-              style={styles.mapExpanded}
-              provider={PROVIDER_DEFAULT}
-              showsCompass={false}
-              showsPointsOfInterest={false}
-              toolbarEnabled={false}
-              initialRegion={{
-                latitude: mapCoordinate.latitude,
-                longitude: mapCoordinate.longitude,
-                latitudeDelta: MAP_EXPANDED_DELTA,
-                longitudeDelta: MAP_EXPANDED_DELTA,
-              }}
-            >
-              <Marker coordinate={mapCoordinate} title={partyName ?? 'Driver'} />
-            </MapView>
-
-            <View
-              style={[styles.mapModalTop, { paddingTop: insets.top + space.sm }]}
-              pointerEvents="box-none"
-            >
-              <Pressable
-                accessibilityRole="button"
-                accessibilityLabel="Close map"
-                hitSlop={12}
-                onPress={() => setMapExpanded(false)}
-                style={({ pressed }) => [
-                  styles.mapCloseBtn,
-                  pressed && styles.mapCloseBtnPressed,
-                ]}
-              >
-                <Icon icon={X} size="md" color={colors.ink} />
-              </Pressable>
-              <View style={styles.mapModalMeta} pointerEvents="none">
-                <Text
-                  style={[styles.mapModalRoute, { color: routeColor }]}
-                  numberOfLines={2}
-                >
-                  {drive.routeText}
-                </Text>
-                {statusBadge('sheet')}
-              </View>
-            </View>
-
-            <View
-              style={[
-                styles.mapModalBottom,
-                { paddingBottom: insets.bottom + space.md },
-              ]}
-              pointerEvents="none"
-            >
-              <Text style={styles.mapModalHint}>
-                {partyName ? `${partyName} · ${status}` : status}
-              </Text>
-            </View>
-          </View>
-        </Modal>
+        <MapPreview
+          coordinate={mapCoordinate}
+          height={MAP_HEIGHT}
+          title={drive.routeText}
+          subtitle={partyName ? `${partyName} · ${status}` : status}
+          markerTitle={partyName ?? 'Driver'}
+          badge={statusBadge('onMap')}
+        />
       ) : null}
 
       <View style={[styles.body, showMap && styles.bodyWithMap]}>
@@ -898,6 +797,12 @@ export function DriveCard({
         ) : null}
       </View>
 
+      {applyError && showApply && !applied ? (
+        <Text style={styles.applyError} accessibilityRole="alert">
+          {applyError}
+        </Text>
+      ) : null}
+
       {passengerPhone ? (
         <ChoiceSheet
           visible={phoneSheetOpen}
@@ -943,86 +848,6 @@ const styles = StyleSheet.create({
   cardWithMap: {
     overflow: 'hidden',
   },
-  mapWrap: {
-    height: MAP_HEIGHT,
-    backgroundColor: colors.canvasDeep,
-  },
-  map: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  mapEmpty: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mapEmptyText: {
-    ...type.caption,
-    color: colors.faint,
-  },
-  mapModal: {
-    flex: 1,
-    backgroundColor: colors.canvasDeep,
-  },
-  mapExpanded: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  mapModalTop: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    paddingHorizontal: space.md,
-    gap: space.sm,
-  },
-  mapCloseBtn: {
-    alignSelf: 'flex-start',
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: 'rgba(27, 32, 38, 0.78)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.glassBorder,
-  },
-  mapCloseBtnPressed: {
-    opacity: 0.88,
-  },
-  mapModalMeta: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    gap: space.sm,
-    paddingHorizontal: space.xs,
-  },
-  mapModalRoute: {
-    flex: 1,
-    fontFamily: fonts.sansSemi,
-    fontSize: 17,
-    letterSpacing: -0.2,
-    lineHeight: 22,
-    color: colors.ink,
-    textShadowColor: 'rgba(0, 0, 0, 0.45)',
-    textShadowOffset: { width: 0, height: 1 },
-    textShadowRadius: 3,
-  },
-  mapModalBottom: {
-    position: 'absolute',
-    left: space.md,
-    right: space.md,
-    bottom: 0,
-  },
-  mapModalHint: {
-    ...type.caption,
-    color: colors.inkSoft,
-    paddingHorizontal: space.md,
-    paddingVertical: space.sm,
-    borderRadius: radius.control,
-    overflow: 'hidden',
-    backgroundColor: 'rgba(27, 32, 38, 0.78)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.glassBorder,
-    alignSelf: 'flex-start',
-  },
   body: {
     padding: space.md,
     gap: space.md,
@@ -1060,11 +885,6 @@ const styles = StyleSheet.create({
     position: 'absolute',
     top: space.sm,
     right: space.sm,
-    backgroundColor: 'rgba(27, 32, 38, 0.78)',
-    borderWidth: StyleSheet.hairlineWidth,
-    borderColor: colors.glassBorder,
-  },
-  badgeOnSheet: {
     backgroundColor: 'rgba(27, 32, 38, 0.78)',
     borderWidth: StyleSheet.hairlineWidth,
     borderColor: colors.glassBorder,
@@ -1182,6 +1002,11 @@ const styles = StyleSheet.create({
     fontSize: 15,
     letterSpacing: -0.1,
     color: colors.onAccent,
+  },
+  applyError: {
+    ...type.caption,
+    color: colors.danger,
+    marginTop: space.sm,
   },
   manageBtn: {
     minHeight: 52,

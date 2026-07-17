@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
-  Linking,
   RefreshControl,
   ScrollView,
   StyleSheet,
@@ -23,6 +22,7 @@ import { bottomNavClearance } from '../components/navigation/BottomNav';
 import { Button } from '../components/ui/Button';
 import { Icon } from '../components/ui/Icon';
 import { LoadingHint } from '../components/ui/LoadingHint';
+import { PaymentProofModal } from '../components/ui/PaymentProofModal';
 import {
   SettlePaidModal,
   type SettlePaidTarget,
@@ -188,6 +188,7 @@ export function BankScreen() {
   const [settleTarget, setSettleTarget] = useState<SettlePaidTarget | null>(
     null,
   );
+  const [proofUrl, setProofUrl] = useState<string | null>(null);
 
   const load = useCallback(async (mode: 'initial' | 'refresh' = 'initial') => {
     if (mode === 'refresh') setRefreshing(true);
@@ -272,13 +273,9 @@ export function BankScreen() {
       }
     >
       <View style={styles.hero}>
-        <Text style={styles.eyebrow}>Balances</Text>
         <Text style={styles.title}>
           <Text style={styles.titleLead}>Your </Text>
           <Text style={styles.titleItalic}>bank</Text>
-        </Text>
-        <Text style={styles.support}>
-          Drivers pay you 12%. Remit 2% to the platform — you keep 10%.
         </Text>
       </View>
 
@@ -303,31 +300,31 @@ export function BankScreen() {
               <Text style={styles.balanceAmount}>
                 {formatUsd(totalProfitCents)}
               </Text>
-              <Text style={styles.profitHint}>
-                Settled 12% received minus 2% you’ve paid the platform
-              </Text>
             </View>
             <View style={styles.totalsDivider} />
-            <View style={styles.totalsRow}>
-              <View style={styles.totalCol}>
-                <Text style={styles.totalLabel}>Owed to you</Text>
+            <View style={styles.totalsBlock}>
+              <View style={styles.totalsRow}>
+                <Text style={styles.totalLabel} numberOfLines={1}>
+                  Owed to you
+                </Text>
+                <Text style={styles.totalLabel} numberOfLines={1}>
+                  You owe
+                </Text>
+                <Text style={styles.totalLabel} numberOfLines={1}>
+                  Owed to us
+                </Text>
+              </View>
+              <View style={styles.totalsRow}>
                 <Text style={styles.totalIncoming}>
                   {formatUsd(owedToYouCents)}
                 </Text>
-              </View>
-              <View style={styles.totalCol}>
-                <Text style={styles.totalLabel}>You owe</Text>
                 <Text style={styles.totalOutgoing}>
                   {formatUsd(youOweCents)}
                 </Text>
+                <Text style={styles.totalOutgoing}>
+                  {formatUsd(owedToUsCents)}
+                </Text>
               </View>
-            </View>
-            <View style={styles.totalsDivider} />
-            <View style={styles.totalCol}>
-              <Text style={styles.totalLabel}>Owed to us</Text>
-              <Text style={styles.totalOutgoing}>
-                {formatUsd(owedToUsCents)}
-              </Text>
             </View>
           </GlassSurface>
 
@@ -467,9 +464,7 @@ export function BankScreen() {
                         {g.settlementProofUrl ? (
                           <Button
                             variant="ghost"
-                            onPress={() =>
-                              void Linking.openURL(g.settlementProofUrl!)
-                            }
+                            onPress={() => setProofUrl(g.settlementProofUrl!)}
                             style={styles.settleBtn}
                           >
                             View payment confirmation
@@ -505,6 +500,11 @@ export function BankScreen() {
           void load('refresh');
         }}
       />
+      <PaymentProofModal
+        visible={proofUrl != null}
+        uri={proofUrl}
+        onClose={() => setProofUrl(null)}
+      />
     </ScrollView>
   );
 }
@@ -520,14 +520,7 @@ const styles = StyleSheet.create({
     alignSelf: 'center',
   },
   hero: {
-    gap: space.sm,
     marginBottom: space.xxl,
-  },
-  eyebrow: {
-    ...type.label,
-    color: colors.muted,
-    textTransform: 'uppercase',
-    paddingLeft: space.xs,
   },
   title: {
     paddingLeft: space.xs,
@@ -539,12 +532,6 @@ const styles = StyleSheet.create({
   titleItalic: {
     ...type.heroItalic,
     color: colors.ink,
-  },
-  support: {
-    ...type.body,
-    color: colors.muted,
-    paddingLeft: space.xs,
-    maxWidth: 320,
   },
   balanceCard: {
     borderRadius: 28,
@@ -568,25 +555,21 @@ const styles = StyleSheet.create({
   profitBlock: {
     gap: space.xs,
   },
-  profitHint: {
-    ...type.caption,
-    color: colors.faint,
-  },
   totalsDivider: {
     height: StyleSheet.hairlineWidth,
     backgroundColor: colors.hairline,
     marginVertical: space.xs,
   },
-  totalsRow: {
-    flexDirection: 'row',
-    gap: space.xl,
-  },
-  totalCol: {
-    flex: 1,
+  totalsBlock: {
     gap: space.xs,
   },
+  totalsRow: {
+    flexDirection: 'row',
+    gap: space.sm,
+  },
   totalLabel: {
-    ...type.caption,
+    ...type.label,
+    flex: 1,
     color: colors.faint,
   },
   balanceAmount: {
@@ -597,17 +580,19 @@ const styles = StyleSheet.create({
     color: colors.ink,
   },
   totalIncoming: {
+    flex: 1,
     fontFamily: fonts.display,
-    fontSize: 28,
+    fontSize: 24,
     letterSpacing: -0.5,
-    lineHeight: 34,
+    lineHeight: 30,
     color: colors.success,
   },
   totalOutgoing: {
+    flex: 1,
     fontFamily: fonts.display,
-    fontSize: 28,
+    fontSize: 24,
     letterSpacing: -0.5,
-    lineHeight: 34,
+    lineHeight: 30,
     color: colors.danger,
   },
   amountIncoming: {

@@ -118,7 +118,7 @@ export function mapApiError(
       case 'vehicle_mismatch':
         return {
           message:
-            'Your vehicle doesn’t match this drive — same class, and enough seats.',
+            'Your vehicle doesn’t have enough seats for this drive.',
           code: err.code,
         };
       case 'driver_busy':

@@ -36,6 +36,7 @@ import { ChoiceGroup } from '../components/ui/ChoiceGroup';
 import { DriverCard } from '../components/ui/DriverCard';
 import { Icon } from '../components/ui/Icon';
 import { LoadingHint } from '../components/ui/LoadingHint';
+import { MapExpandProvider } from '../components/ui/MapExpand';
 import { NumberStepper } from '../components/ui/NumberStepper';
 import { TextField } from '../components/ui/TextField';
 import { MistBackdrop, colors, fonts, space, type } from '../theme';
@@ -325,6 +326,7 @@ export function CreateDriveSheet({
       presentationStyle="overFullScreen"
       onRequestClose={requestClose}
     >
+      <MapExpandProvider>
       <Animated.View style={[styles.root, { opacity: veil }]}>
         <Animated.View style={[styles.fullScreen, { opacity: screenOpacity }]}>
           <MistBackdrop style={styles.fill} />
@@ -521,6 +523,7 @@ export function CreateDriveSheet({
           </KeyboardAvoidingView>
         </Animated.View>
       </Animated.View>
+      </MapExpandProvider>
     </Modal>
   );
 }

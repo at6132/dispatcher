@@ -10,6 +10,8 @@ import {
   users,
 } from '../db/schema.js';
 import {
+  DRIVER_KEEP_RATE,
+  POSTER_KEEP_RATE,
   driverCommissionCents,
   platformFeeCents,
 } from '../lib/commission.js';
@@ -58,25 +60,55 @@ function canSeePassenger(drive: {
   return false;
 }
 
-/** Assignee on assigned/picked_up — one job at a time. */
+/**
+ * Assignee's active job, if any.
+ * Defaults to both assigned + picked_up (the one-job invariant). Pass a
+ * narrower `statuses` to only block on some states — e.g. applying is allowed
+ * once you're mid-ride (picked_up), so the apply path passes ['assigned'].
+ */
 async function findActiveAssignment(
   tx: Pick<typeof db, 'select'>,
   driverId: string,
-  excludeDriveId?: string,
+  opts?: {
+    excludeDriveId?: string;
+    statuses?: ('assigned' | 'picked_up')[];
+  },
 ) {
+  const statuses = opts?.statuses ?? ['assigned', 'picked_up'];
   const conditions = [
     eq(drives.assigneeId, driverId),
-    inArray(drives.status, ['assigned', 'picked_up']),
+    inArray(drives.status, statuses),
   ];
-  if (excludeDriveId) {
-    conditions.push(ne(drives.id, excludeDriveId));
+  if (opts?.excludeDriveId) {
+    conditions.push(ne(drives.id, opts.excludeDriveId));
   }
   const [row] = await tx
-    .select({ id: drives.id })
+    .select({ id: drives.id, status: drives.status })
     .from(drives)
     .where(and(...conditions))
     .limit(1);
   return row ?? null;
+}
+
+/** Driver ids (from the given set) who are currently mid-ride (picked_up). */
+async function findMidJobDriverIds(
+  driverIds: string[],
+): Promise<Set<string>> {
+  if (driverIds.length === 0) return new Set();
+  const rows = await db
+    .select({ assigneeId: drives.assigneeId })
+    .from(drives)
+    .where(
+      and(
+        inArray(drives.assigneeId, driverIds),
+        eq(drives.status, 'picked_up'),
+      ),
+    );
+  const ids = new Set<string>();
+  for (const r of rows) {
+    if (r.assigneeId) ids.add(r.assigneeId);
+  }
+  return ids;
 }
 
 export type DriveDto = {
@@ -115,7 +147,7 @@ export type DriveDto = {
 export type DriveListItemDto = DriveDto & {
   poster: Awaited<ReturnType<typeof toPublicProfile>>;
   assignee?: Awaited<ReturnType<typeof toPublicProfile>>;
-  /** Accepted applicant location (apply-time) — for poster map on active cards. */
+  /** Current available-driver location, falling back to the apply-time fix. */
   assigneeLat?: number;
   assigneeLng?: number;
 };
@@ -432,11 +464,11 @@ export async function listDrives(
     conditions.push(
       or(sql`${drives.invitedDriverId} IS NULL`, eq(drives.posterId, viewerId))!,
     );
-    // Match viewer vehicle: same class, seats needed ≤ driver seats.
+    // Match viewer vehicle: seats needed ≤ driver seats (exact or extra).
+    // Vehicle class is not filtered on the open board.
     // Posters still see their own open posts to manage applicants.
     const [profile] = await db
       .select({
-        vehicleClass: driverProfiles.vehicleClass,
         seats: driverProfiles.seats,
       })
       .from(driverProfiles)
@@ -447,7 +479,6 @@ export async function listDrives(
         or(
           eq(drives.posterId, viewerId),
           and(
-            eq(drives.vehicleClass, profile.vehicleClass),
             lte(drives.seats, profile.seats),
             sql`${drives.invitedDriverId} IS NULL`,
           ),
@@ -577,7 +608,18 @@ export async function listDrives(
       availability: 'offline' as const,
     };
     const assignee = row.assigneeId ? profiles.get(row.assigneeId) : undefined;
-    const coords = assigneeCoordsByDrive.get(row.id);
+    const acceptedAt = assigneeCoordsByDrive.get(row.id);
+    const canSeeAssigneeLocation =
+      row.assigneeId != null &&
+      (row.posterId === viewerId || row.assigneeId === viewerId);
+    const liveLat = Number(assignee?.lastLat);
+    const liveLng = Number(assignee?.lastLng);
+    const coords =
+      canSeeAssigneeLocation &&
+      Number.isFinite(liveLat) &&
+      Number.isFinite(liveLng)
+        ? { lat: liveLat, lng: liveLng }
+        : acceptedAt;
     const posterIsFavorite = favoriteIds.has(row.posterId);
     return {
       ...mapDrive(
@@ -683,29 +725,28 @@ export async function applyToDrive(
 
       const [profile] = await tx
         .select({
-          vehicleClass: driverProfiles.vehicleClass,
           seats: driverProfiles.seats,
         })
         .from(driverProfiles)
         .where(eq(driverProfiles.userId, driverId))
         .limit(1);
-      if (
-        !profile ||
-        profile.vehicleClass !== drive.vehicleClass ||
-        profile.seats < drive.seats
-      ) {
+      if (!profile || profile.seats < drive.seats) {
         throw new AppError(
           403,
-          'Your vehicle doesn’t match this drive (class or seats).',
+          'Your vehicle doesn’t have enough seats for this drive.',
           'vehicle_mismatch',
         );
       }
 
-      const busy = await findActiveAssignment(tx, driverId);
+      // You can line up your next ride once the passenger is picked up, so
+      // only an accepted-but-not-started job (assigned) blocks applying.
+      const busy = await findActiveAssignment(tx, driverId, {
+        statuses: ['assigned'],
+      });
       if (busy) {
         throw new AppError(
           409,
-          'Finish your current job before applying to another.',
+          'Pick up your current passenger before applying to another job.',
           'driver_busy',
         );
       }
@@ -851,15 +892,32 @@ export async function listApplications(posterId: string, driveId: string) {
     listFavoriteUserIds(posterId),
   ]);
 
+  // Flag applicants who are still finishing another ride (picked_up) so the
+  // poster knows they applied mid-job and can wait to accept.
+  const midJobIds = await findMidJobDriverIds(rows.map((r) => r.user.id));
+
   const items = await Promise.all(
     rows.map(async (r) => {
       const profile = await toPublicProfile(r.user.id);
       const isFavorite = favoriteIds.has(r.user.id);
+      const liveLat = Number(profile.lastLat);
+      const liveLng = Number(profile.lastLng);
+      const hasLiveLocation =
+        Number.isFinite(liveLat) && Number.isFinite(liveLng);
       return {
         id: r.application.id,
         status: r.application.status,
-        lat: r.application.lat ? Number(r.application.lat) : undefined,
-        lng: r.application.lng ? Number(r.application.lng) : undefined,
+        midJob: midJobIds.has(r.user.id),
+        lat: hasLiveLocation
+          ? liveLat
+          : r.application.lat != null
+            ? Number(r.application.lat)
+            : undefined,
+        lng: hasLiveLocation
+          ? liveLng
+          : r.application.lng != null
+            ? Number(r.application.lng)
+            : undefined,
         createdAt: r.application.createdAt.toISOString(),
         ...(isFavorite ? { isFavorite: true as const } : {}),
         favorited: isFavorite,
@@ -917,7 +975,9 @@ export async function acceptDirectInvite(
         throw new AppError(404, 'Offer not found', 'offer_not_found');
       }
 
-      const busy = await findActiveAssignment(tx, driverId, driveId);
+      const busy = await findActiveAssignment(tx, driverId, {
+        excludeDriveId: driveId,
+      });
       if (busy) {
         throw new AppError(
           409,
@@ -1065,11 +1125,15 @@ export async function acceptApplication(
         throw new AppError(404, 'Application not found', 'application_not_found');
       }
 
-      const busy = await findActiveAssignment(tx, app.driverId, driveId);
+      const busy = await findActiveAssignment(tx, app.driverId, {
+        excludeDriveId: driveId,
+      });
       if (busy) {
         throw new AppError(
           409,
-          'This driver is already on another job',
+          busy.status === 'picked_up'
+            ? 'This driver is still finishing another ride. Accept once they complete it.'
+            : 'This driver is already on another job',
           'driver_busy',
         );
       }
@@ -1414,6 +1478,82 @@ export async function respondDriveCancel(
   );
 }
 
+/**
+ * Poster takes down a job they posted — removes it from the board.
+ * Allowed while open / assigned / picked up (not after complete).
+ */
+export async function cancelDriveByPoster(
+  posterId: string,
+  driveId: string,
+): Promise<DriveDto> {
+  return withLock(`drive:${driveId}:mutate`, async () =>
+    db.transaction(async (tx) => {
+      const [drive] = await tx
+        .select()
+        .from(drives)
+        .where(eq(drives.id, driveId))
+        .for('update');
+      if (!drive) throw new AppError(404, 'Drive not found', 'drive_not_found');
+      if (drive.posterId !== posterId) {
+        throw new AppError(403, 'Only the poster can take this down', 'forbidden');
+      }
+      if (
+        drive.status !== 'open' &&
+        drive.status !== 'assigned' &&
+        drive.status !== 'picked_up'
+      ) {
+        throw new AppError(
+          409,
+          'This drive can’t be taken down',
+          'invalid_status',
+        );
+      }
+
+      const [updated] = await tx
+        .update(drives)
+        .set({
+          status: 'cancelled',
+          cancelRequestedAt: null,
+          updatedAt: new Date(),
+        })
+        .where(
+          and(
+            eq(drives.id, driveId),
+            inArray(drives.status, ['open', 'assigned', 'picked_up']),
+          ),
+        )
+        .returning();
+      if (!updated) {
+        throw new AppError(
+          409,
+          'This drive can’t be taken down',
+          'invalid_status',
+        );
+      }
+
+      await getRedis().del('board:open');
+
+      if (updated.assigneeId) {
+        notifyCancelDecision({
+          driverId: updated.assigneeId,
+          driveId,
+          routeText: updated.routeText,
+          approved: true,
+        });
+      } else if (updated.invitedDriverId) {
+        notifyCancelDecision({
+          driverId: updated.invitedDriverId,
+          driveId,
+          routeText: updated.routeText,
+          approved: true,
+        });
+      }
+
+      return mapDrive(updated, posterId);
+    }),
+  );
+}
+
 export async function completeDrive(
   actorId: string,
   driveId: string,
@@ -1715,24 +1855,23 @@ export async function listBalances(userId: string) {
     ]),
   );
 
-  // Settled 12% from drivers minus settled 2% remitted to platform.
-  const [grossRow] = await db
+  // Lifetime take-home: 10% of trips you posted + 88% of trips you drove.
+  // Cast cost to numeric so rate params bind as numeric (not integer).
+  const [profitRow] = await db
     .select({
-      cents: sql<number>`coalesce(sum(${balances.amountCents}), 0)::int`,
+      cents: sql<number>`coalesce(sum(
+        (case when ${drives.posterId} = ${userId}
+          then round(${drives.costCents}::numeric * ${POSTER_KEEP_RATE}) else 0 end)
+        + (case when ${drives.assigneeId} = ${userId}
+          then round(${drives.costCents}::numeric * ${DRIVER_KEEP_RATE}) else 0 end)
+      ), 0)::int`,
     })
-    .from(balances)
-    .where(
-      and(eq(balances.posterId, userId), eq(balances.status, 'settled')),
-    );
-  const [feePaidRow] = await db
-    .select({
-      cents: sql<number>`coalesce(sum(${platformFees.amountCents}), 0)::int`,
-    })
-    .from(platformFees)
+    .from(drives)
     .where(
       and(
-        eq(platformFees.posterId, userId),
-        eq(platformFees.status, 'settled'),
+        eq(drives.status, 'completed'),
+        sql`${drives.costCents} is not null`,
+        or(eq(drives.posterId, userId), eq(drives.assigneeId, userId)),
       ),
     );
 
@@ -1788,6 +1927,6 @@ export async function listBalances(userId: string) {
     items,
     platformFees: platformFeeItems,
     owedToUsCents,
-    totalProfitCents: (grossRow?.cents ?? 0) - (feePaidRow?.cents ?? 0),
+    totalProfitCents: profitRow?.cents ?? 0,
   };
 }

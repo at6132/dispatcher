@@ -41,10 +41,10 @@ import { bottomNavClearance } from '../components/navigation/BottomNav';
 import { Button } from '../components/ui/Button';
 import { CompleteDriveModal } from '../components/ui/CompleteDriveModal';
 import { DriveCard } from '../components/ui/DriveCard';
-import { getCachedCoordinate } from '../components/ui/getCachedCoordinate';
 import { IncomingJobModal } from '../components/ui/IncomingJobModal';
 import { LoadingHint } from '../components/ui/LoadingHint';
 import { driverMatchesOpenDrive } from '../drives/matchDrive';
+import { useDriverLocation } from '../location/LocationContext';
 import { useProfileViewer } from '../profiles/ProfileViewerContext';
 import { GlassSurface, colors, fonts, radius, space, type } from '../theme';
 
@@ -151,6 +151,7 @@ export function HomeScreen({
 }: HomeScreenProps) {
   const insets = useSafeAreaInsets();
   const { user, updatePresence } = useAuth();
+  const { refreshLocation } = useDriverLocation();
   const { openProfile } = useProfileViewer();
   const pagerRef = useRef<ComponentRef<typeof Animated.ScrollView>>(null);
   const { width: pageWidth } = useWindowDimensions();
@@ -166,7 +167,10 @@ export function HomeScreen({
   });
   const [applyingId, setApplyingId] = useState<string | null>(null);
   const [appliedIds, setAppliedIds] = useState<Set<string>>(() => new Set());
-  const [applyError, setApplyError] = useState<string | null>(null);
+  const [applyError, setApplyError] = useState<{
+    driveId: string;
+    message: string;
+  } | null>(null);
   const [completingDrive, setCompletingDrive] = useState<DriveListItem | null>(
     null,
   );
@@ -201,25 +205,6 @@ export function HomeScreen({
     }
   }, [user?.id]);
 
-  useEffect(() => {
-    let cancelled = false;
-    const bumpLocation = async () => {
-      if (!user?.onboardingComplete) return;
-      if ((user.availability ?? 'offline') === 'offline') return;
-      const coord = await getCachedCoordinate();
-      if (!coord || cancelled) return;
-      try {
-        await updatePresence({ lat: coord.lat, lng: coord.lng });
-      } catch {
-        // Presence location is best-effort
-      }
-    };
-    void bumpLocation();
-    return () => {
-      cancelled = true;
-    };
-  }, [user?.onboardingComplete, user?.availability, updatePresence]);
-
   const onSetAvailability = async (availability: DriverAvailability) => {
     if (!user) return;
     const previous = user.availability ?? 'offline';
@@ -237,7 +222,7 @@ export function HomeScreen({
     }
     if (availability !== 'offline') {
       try {
-        const coord = await getCachedCoordinate();
+        const coord = await refreshLocation();
         if (coord) {
           await updatePresence({ lat: coord.lat, lng: coord.lng });
         }
@@ -409,7 +394,7 @@ export function HomeScreen({
     setApplyError(null);
     setApplyingId(driveId);
     try {
-      const coords = await getCachedCoordinate();
+      const coords = await refreshLocation();
       await applyToDrive(driveId, coords ?? undefined);
       setAppliedIds((prev) => new Set(prev).add(driveId));
     } catch (err) {
@@ -417,7 +402,8 @@ export function HomeScreen({
       if (mapped.code === 'already_applied') {
         setAppliedIds((prev) => new Set(prev).add(driveId));
       } else {
-        setApplyError(mapped.message);
+        setApplyError({ driveId, message: mapped.message });
+        Alert.alert('Can’t apply', mapped.message);
       }
     } finally {
       setApplyingId(null);
@@ -576,6 +562,9 @@ export function HomeScreen({
         applied={applied}
         pickingUp={pickingUpId === item.id}
         cancelling={cancellingId === item.id}
+        applyError={
+          applyError?.driveId === item.id ? applyError.message : null
+        }
         applyAgain={applyAgain}
         showMap={opts?.showMap}
         onOpenProfile={openProfile}
@@ -796,7 +785,7 @@ export function HomeScreen({
                   ListHeaderComponent={
                     b.key === 'open' && applyError ? (
                       <Text style={styles.applyError} accessibilityRole="alert">
-                        {applyError}
+                        {applyError.message}
                       </Text>
                     ) : null
                   }

@@ -28,6 +28,7 @@ import { ContactSupportScreen } from './src/screens/auth/ContactSupportScreen';
 import { MainShell } from './src/screens/MainShell';
 import { DevicePermissionsScreen } from './src/screens/onboarding/DevicePermissionsScreen';
 import { OnboardingScreen } from './src/screens/onboarding/OnboardingScreen';
+import { LocationProvider } from './src/location/LocationContext';
 import { colors } from './src/theme';
 
 function Root() {
@@ -136,17 +137,19 @@ export default function App() {
   return (
     <SafeAreaProvider initialMetrics={initialWindowMetrics}>
       <AuthProvider>
-        {fontsReady ? (
-          <>
-            <Root />
-            <StatusBar style="light" />
-          </>
-        ) : (
-          <View style={styles.boot}>
-            <LoadingHint label="Loading…" variant="block" />
-            <StatusBar style="light" />
-          </View>
-        )}
+        <LocationProvider>
+          {fontsReady ? (
+            <>
+              <Root />
+              <StatusBar style="light" />
+            </>
+          ) : (
+            <View style={styles.boot}>
+              <LoadingHint label="Loading…" variant="block" />
+              <StatusBar style="light" />
+            </View>
+          )}
+        </LocationProvider>
       </AuthProvider>
     </SafeAreaProvider>
   );

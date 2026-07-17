@@ -4,9 +4,9 @@ Standalone ops console for the Dispatcher API. Separate from the Expo driver app
 
 ## Production
 
-https://admin-production-3f9a.up.railway.app
+https://admin-production-6983.up.railway.app
 
-Talks to `https://api-production-f4ac.up.railway.app`. Login with password + Telegram `/allow`.
+Talks to `https://dispatcher-production-31d1.up.railway.app`. Login with password + Telegram `/allow`.
 
 ## Run locally
 

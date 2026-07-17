@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
+  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -21,9 +22,9 @@ import { mapApiError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
 import { formatPhoneDisplay } from '../auth/validation';
 import { Button } from '../components/ui/Button';
-import { getCachedCoordinate } from '../components/ui/getCachedCoordinate';
 import { LoadingHint } from '../components/ui/LoadingHint';
 import { TextField } from '../components/ui/TextField';
+import { useDriverLocation } from '../location/LocationContext';
 import { colors, fonts, space, tripRouteColor, type } from '../theme';
 
 type DriveDetailScreenProps = {
@@ -58,6 +59,7 @@ export function DriveDetailScreen({
 }: DriveDetailScreenProps) {
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
+  const { refreshLocation } = useDriverLocation();
   const [drive, setDrive] = useState<Drive | null>(null);
   const [poster, setPoster] = useState<PublicProfile | null>(null);
   const [assignee, setAssignee] = useState<PublicProfile | null>(null);
@@ -112,7 +114,7 @@ export function DriveDetailScreen({
     setActionError(null);
     setApplying(true);
     try {
-      const coords = await getCachedCoordinate();
+      const coords = await refreshLocation();
       await applyToDrive(drive.id, coords ?? undefined);
       await load();
       onChanged?.();
@@ -123,6 +125,7 @@ export function DriveDetailScreen({
         onChanged?.();
       } else {
         setActionError(mapped.message);
+        Alert.alert('Can’t apply', mapped.message);
       }
     } finally {
       setApplying(false);
@@ -249,6 +252,11 @@ export function DriveDetailScreen({
                 >
                   {canApplyAgain ? 'Apply again' : 'Apply for this drive'}
                 </Button>
+                {actionError ? (
+                  <Text style={styles.error} accessibilityRole="alert">
+                    {actionError}
+                  </Text>
+                ) : null}
               </View>
             ) : null}
 
@@ -280,13 +288,12 @@ export function DriveDetailScreen({
                 >
                   Mark complete
                 </Button>
+                {actionError ? (
+                  <Text style={styles.error} accessibilityRole="alert">
+                    {actionError}
+                  </Text>
+                ) : null}
               </View>
-            ) : null}
-
-            {actionError ? (
-              <Text style={styles.error} accessibilityRole="alert">
-                {actionError}
-              </Text>
             ) : null}
           </>
         ) : null}

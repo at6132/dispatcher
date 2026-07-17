@@ -5,7 +5,7 @@
     "version": "1.0.0",
     "description": "Backend for the Dispatcher Expo app — auth, onboarding, drives board, balances."
   },
-  "servers": [{ "url": "https://api-production-f4ac.up.railway.app" }],
+  "servers": [{ "url": "https://dispatcher-production-31d1.up.railway.app" }],
   "components": {
     "securitySchemes": {
       "bearerAuth": {
@@ -236,6 +236,13 @@
       "post": {
         "security": [{ "bearerAuth": [] }],
         "summary": "Unassign and reopen",
+        "responses": { "200": { "description": "OK" } }
+      }
+    },
+    "/v1/drives/{id}/cancel": {
+      "post": {
+        "security": [{ "bearerAuth": [] }],
+        "summary": "Poster takes down a drive (open/assigned/picked_up → cancelled)",
         "responses": { "200": { "description": "OK" } }
       }
     },

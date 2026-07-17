@@ -14,6 +14,7 @@ import { Button } from '../components/ui/Button';
 import { DriverCard } from '../components/ui/DriverCard';
 import { Icon } from '../components/ui/Icon';
 import { LoadingHint } from '../components/ui/LoadingHint';
+import { MapExpandProvider } from '../components/ui/MapExpand';
 import { MistBackdrop, colors, fonts, radius, space, type } from '../theme';
 
 function availabilityLabel(status: DriverAvailability | undefined) {
@@ -25,6 +26,18 @@ function availabilityLabel(status: DriverAvailability | undefined) {
     default:
       return 'Offline';
   }
+}
+
+function isOnline(status: DriverAvailability | undefined) {
+  return status === 'available' || status === 'busy';
+}
+
+function profileCoordinate(item: ProfileListItem | null) {
+  if (!item || !isOnline(item.availability)) return null;
+  const lat = Number(item.lastLat);
+  const lng = Number(item.lastLng);
+  if (!Number.isFinite(lat) || !Number.isFinite(lng)) return null;
+  return { latitude: lat, longitude: lng };
 }
 
 function availabilityTone(status: DriverAvailability | undefined) {
@@ -145,6 +158,7 @@ export function ProfileDetailSheet({
       presentationStyle="overFullScreen"
       onRequestClose={onClose}
     >
+      <MapExpandProvider>
       <View style={styles.root}>
         <MistBackdrop style={styles.fill} />
         <View style={styles.screen}>
@@ -207,7 +221,8 @@ export function ProfileDetailSheet({
                   photoUri={profile.onboarding?.selfPhotoUri}
                   vehicleInteriorUri={profile.onboarding?.vehicleInteriorUri}
                   vehicleExteriorUri={profile.onboarding?.vehicleExteriorUri}
-                  showMap={false}
+                  coordinate={profileCoordinate(profile)}
+                  showMap={isOnline(profile.availability)}
                   favorited={profile.favorited}
                   availability={profile.availability ?? 'offline'}
                 />
@@ -303,6 +318,7 @@ export function ProfileDetailSheet({
           </ScrollView>
         </View>
       </View>
+      </MapExpandProvider>
     </Modal>
   );
 }

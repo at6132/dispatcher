@@ -8,6 +8,7 @@ import {
   type AddOrigin,
   type MainTab,
 } from '../components/navigation/BottomNav';
+import { MapExpandProvider } from '../components/ui/MapExpand';
 import { ProfileViewerProvider } from '../profiles/ProfileViewerContext';
 import { syncPushRegistration } from '../notifications/registerPush';
 import { MistBackdrop } from '../theme';
@@ -49,46 +50,48 @@ export function MainShell() {
   return (
     <MistBackdrop>
       <ProfileViewerProvider onSendDirect={(target) => openCompose(null, target)}>
-        <View style={styles.root}>
-          <View style={styles.page}>
-            {tab === 'home' ? (
-              <HomeScreen
-                refreshToken={boardRefresh}
-                onManageDrive={setManagingDrive}
-              />
-            ) : tab === 'profiles' ? (
-              <ProfilesScreen
-                onSendDirect={(target) => openCompose(null, target)}
-              />
-            ) : tab === 'bank' ? (
-              <BankScreen />
-            ) : (
-              <ProfileScreen />
-            )}
+        <MapExpandProvider>
+          <View style={styles.root}>
+            <View style={styles.page}>
+              {tab === 'home' ? (
+                <HomeScreen
+                  refreshToken={boardRefresh}
+                  onManageDrive={setManagingDrive}
+                />
+              ) : tab === 'profiles' ? (
+                <ProfilesScreen
+                  onSendDirect={(target) => openCompose(null, target)}
+                />
+              ) : tab === 'bank' ? (
+                <BankScreen />
+              ) : (
+                <ProfileScreen />
+              )}
+            </View>
+            <BottomNav
+              active={tab}
+              onChange={setTab}
+              onAddPress={(origin) => openCompose(origin)}
+            />
+            <CreateDriveSheet
+              visible={composeOpen}
+              origin={addOrigin}
+              directTo={directTo}
+              onClose={() => {
+                setComposeOpen(false);
+                setAddOrigin(null);
+                setDirectTo(null);
+              }}
+              onCreated={bumpBoard}
+            />
+            <ManageDriveSheet
+              visible={managingDrive != null}
+              drive={managingDrive}
+              onClose={() => setManagingDrive(null)}
+              onChanged={bumpBoard}
+            />
           </View>
-          <BottomNav
-            active={tab}
-            onChange={setTab}
-            onAddPress={(origin) => openCompose(origin)}
-          />
-          <CreateDriveSheet
-            visible={composeOpen}
-            origin={addOrigin}
-            directTo={directTo}
-            onClose={() => {
-              setComposeOpen(false);
-              setAddOrigin(null);
-              setDirectTo(null);
-            }}
-            onCreated={bumpBoard}
-          />
-          <ManageDriveSheet
-            visible={managingDrive != null}
-            drive={managingDrive}
-            onClose={() => setManagingDrive(null)}
-            onChanged={bumpBoard}
-          />
-        </View>
+        </MapExpandProvider>
       </ProfileViewerProvider>
     </MistBackdrop>
   );

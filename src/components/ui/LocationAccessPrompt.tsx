@@ -8,10 +8,11 @@ import {
   Text,
   View,
 } from 'react-native';
-import { isRunningInExpoGo } from 'expo';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as Location from 'expo-location';
 
 import { Button } from './Button';
+import { ensureBackgroundLocationUpdates } from '../../location/locationService';
 import { colors, fonts, space, type } from '../../theme';
 
 export type LocationAccessState =
@@ -20,7 +21,8 @@ export type LocationAccessState =
   | 'whenInUse'
   | 'always';
 
-const inExpoGo = isRunningInExpoGo();
+const inExpoGo =
+  Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
 /** True when we have the best access this environment can grant. */
 export function isLocationAccessReady(access: LocationAccessState): boolean {
@@ -122,6 +124,7 @@ export function LocationAccessPrompt({ onAccessChange }: Props) {
       publish(next);
 
       if (next === 'always') {
+        await ensureBackgroundLocationUpdates();
         setNote(null);
         return;
       }
@@ -136,6 +139,10 @@ export function LocationAccessPrompt({ onAccessChange }: Props) {
       }
 
       setNote('Couldn’t get full location access. Open Settings to allow it.');
+    } catch {
+      setNote(
+        'Couldn’t finish location setup. Restart the app or open Settings and confirm Location is set to Always.',
+      );
     } finally {
       setBusy(false);
     }

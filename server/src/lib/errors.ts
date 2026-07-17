@@ -1,7 +1,6 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
 import { maskPhone, shortId } from './log.js';
-import { notifyTelegram, shouldTelegramAlert } from './telegram.js';
 
 export class AppError extends Error {
   constructor(
@@ -40,18 +39,10 @@ export function sendError(
     );
   }
 
-  if (req && shouldTelegramAlert({ statusCode, code: eventCode }) && !req._telegramAlerted) {
-    req._telegramAlerted = true;
-    notifyTelegram({
-      title: 'API error',
-      statusCode,
-      code: eventCode,
-      requestId: req.id,
-      path: (req.url ?? '').split('?')[0],
-      method: req.method,
-      userId: shortId(req.user?.id),
-      error: message,
-    });
+  // Stash for onResponse Telegram alerts (message + code + stack when available).
+  if (req) {
+    if (req._alertError == null) req._alertError = message;
+    if (!req._alertCode) req._alertCode = eventCode;
   }
 
   return reply.status(statusCode).send({

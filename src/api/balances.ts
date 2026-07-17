@@ -43,7 +43,7 @@ export type ListBalancesResult = {
   items: Balance[];
   platformFees: PlatformFee[];
   owedToUsCents: number;
-  /** Settled 12% received minus settled 2% remitted to platform. */
+  /** Lifetime take-home: 10% of posted trips + 88% of driven trips. */
   totalProfitCents: number;
 };
 

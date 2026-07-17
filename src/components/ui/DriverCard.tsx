@@ -1,8 +1,8 @@
 import { Image, Pressable, StyleSheet, Text, View } from 'react-native';
-import MapView, { Marker, PROVIDER_DEFAULT } from 'react-native-maps';
 import { Heart } from 'lucide-react-native';
 
 import { Icon } from './Icon';
+import { MapPreview } from './MapExpand';
 import { colors, fonts, radius, space, type } from '../../theme';
 import type { DriverAvailability } from '../../api/drives';
 
@@ -38,6 +38,8 @@ export type DriverCardProps = {
   favoriting?: boolean;
   /** Available / Busy / Offline chip */
   availability?: DriverAvailability;
+  /** Applicant is finishing another ride — applied mid-job. */
+  midJob?: boolean;
 };
 
 function availabilityLabel(status: DriverAvailability | undefined) {
@@ -65,7 +67,6 @@ function availabilityTone(status: DriverAvailability | undefined) {
 const AVATAR = 48;
 const VEHICLE_THUMB = 72;
 const MAP_HEIGHT = 148;
-const DELTA = 0.02;
 
 /**
  * Canonical driver listing tile — what dispatchers see in the feed.
@@ -88,6 +89,7 @@ export function DriverCard({
   onToggleFavorite,
   favoriting = false,
   availability,
+  midJob = false,
 }: DriverCardProps) {
   const initial = (name.trim().charAt(0) || '?').toUpperCase();
   const hasVehiclePhotos = Boolean(vehicleInteriorUri || vehicleExteriorUri);
@@ -143,60 +145,51 @@ export function DriverCard({
     >
       {highlighted ? <Text style={styles.favoriteLabel}>Favorite</Text> : null}
       {showMap ? (
-        <View style={styles.mapWrap}>
-          {coordinate ? (
-            <MapView
-              key={`${coordinate.latitude},${coordinate.longitude}`}
-              style={styles.map}
-              provider={PROVIDER_DEFAULT}
-              pointerEvents="none"
-              scrollEnabled={false}
-              zoomEnabled={false}
-              rotateEnabled={false}
-              pitchEnabled={false}
-              toolbarEnabled={false}
-              showsCompass={false}
-              showsPointsOfInterest={false}
-              initialRegion={{
-                latitude: coordinate.latitude,
-                longitude: coordinate.longitude,
-                latitudeDelta: DELTA,
-                longitudeDelta: DELTA,
-              }}
-            >
-              <Marker coordinate={coordinate} />
-            </MapView>
-          ) : (
-            <View style={styles.mapEmpty}>
-              <Text style={styles.mapEmptyText}>Waiting for location</Text>
-            </View>
-          )}
-          {favorited && onToggleFavorite == null ? (
-            <View style={styles.heartBadgeMap} pointerEvents="none">
-              <Icon
-                icon={Heart}
-                size={14}
-                color={colors.danger}
-                fill={colors.danger}
-                strokeWidth={1.5}
-              />
-            </View>
-          ) : null}
-        </View>
+        <MapPreview
+          coordinate={coordinate}
+          height={MAP_HEIGHT}
+          title={name}
+          subtitle={
+            availability != null ? availabilityLabel(status) : undefined
+          }
+          markerTitle={name}
+          badge={
+            favorited && onToggleFavorite == null ? (
+              <View style={styles.heartBadgeMap} pointerEvents="none">
+                <Icon
+                  icon={Heart}
+                  size={14}
+                  color={colors.danger}
+                  fill={colors.danger}
+                  strokeWidth={1.5}
+                />
+              </View>
+            ) : null
+          }
+        />
       ) : null}
 
       <View style={styles.body}>
-        {availability != null ? (
-          <View style={styles.statusTag}>
-            <View
-              style={[
-                styles.statusDot,
-                { backgroundColor: availabilityTone(status) },
-              ]}
-            />
-            <Text style={styles.statusTagLabel}>
-              {availabilityLabel(status)}
-            </Text>
+        {availability != null || midJob ? (
+          <View style={styles.tagRow}>
+            {availability != null ? (
+              <View style={styles.statusTag}>
+                <View
+                  style={[
+                    styles.statusDot,
+                    { backgroundColor: availabilityTone(status) },
+                  ]}
+                />
+                <Text style={styles.statusTagLabel}>
+                  {availabilityLabel(status)}
+                </Text>
+              </View>
+            ) : null}
+            {midJob ? (
+              <View style={styles.midJobTag}>
+                <Text style={styles.midJobLabel}>Finishing a ride</Text>
+              </View>
+            ) : null}
           </View>
         ) : null}
         <View style={styles.identity}>
@@ -305,25 +298,15 @@ const styles = StyleSheet.create({
     paddingTop: space.sm,
     paddingHorizontal: space.md,
   },
-  mapWrap: {
-    height: MAP_HEIGHT,
-    backgroundColor: colors.canvasDeep,
-  },
-  map: {
-    ...StyleSheet.absoluteFillObject,
-  },
-  mapEmpty: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mapEmptyText: {
-    ...type.caption,
-    color: colors.faint,
-  },
   body: {
     padding: space.md,
     gap: space.md,
+  },
+  tagRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'wrap',
+    gap: space.sm,
   },
   statusTag: {
     alignSelf: 'flex-start',
@@ -334,6 +317,20 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: radius.sm,
     backgroundColor: colors.accentMuted,
+  },
+  midJobTag: {
+    alignSelf: 'flex-start',
+    paddingHorizontal: space.sm,
+    paddingVertical: 4,
+    borderRadius: radius.sm,
+    backgroundColor: colors.accentMuted,
+    borderWidth: StyleSheet.hairlineWidth,
+    borderColor: colors.accent,
+  },
+  midJobLabel: {
+    ...type.label,
+    color: colors.accent,
+    textTransform: 'uppercase',
   },
   statusDot: {
     width: 7,

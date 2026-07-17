@@ -1,7 +1,7 @@
 import cors from '@fastify/cors';
 import helmet from '@fastify/helmet';
 import rateLimit from '@fastify/rate-limit';
-import Fastify from 'fastify';
+import Fastify, { type FastifyRequest } from 'fastify';
 import { randomUUID } from 'node:crypto';
 
 import { env } from './config/env.js';
@@ -37,6 +37,42 @@ declare module 'fastify' {
   interface FastifyRequest {
     _startedAt?: number;
     _telegramAlerted?: boolean;
+    /** Stashed for Telegram 5xx alerts (message / Error / response body). */
+    _alertError?: unknown;
+    _alertCode?: string;
+  }
+}
+
+function stashAlertError(
+  req: FastifyRequest,
+  err: unknown,
+  code?: string,
+): void {
+  if (req._alertError == null && err != null) req._alertError = err;
+  if (code && !req._alertCode) req._alertCode = code;
+}
+
+function extractErrorFromPayload(payload: unknown): {
+  message?: string;
+  code?: string;
+} | null {
+  try {
+    let raw: unknown = payload;
+    if (typeof payload === 'string') {
+      raw = JSON.parse(payload);
+    } else if (Buffer.isBuffer(payload)) {
+      raw = JSON.parse(payload.toString('utf8'));
+    }
+    if (!raw || typeof raw !== 'object') return null;
+    const err = (raw as { error?: unknown }).error;
+    if (!err || typeof err !== 'object') return null;
+    const obj = err as { message?: unknown; code?: unknown };
+    return {
+      message: typeof obj.message === 'string' ? obj.message : undefined,
+      code: typeof obj.code === 'string' ? obj.code : undefined,
+    };
+  } catch {
+    return null;
   }
 }
 
@@ -132,20 +168,34 @@ export async function buildApp() {
     );
 
     if (
-      shouldTelegramAlert({ statusCode: reply.statusCode }) &&
+      shouldTelegramAlert({
+        statusCode: reply.statusCode,
+        code: request._alertCode,
+      }) &&
       !request._telegramAlerted
     ) {
       request._telegramAlerted = true;
       notifyTelegram({
         title: 'HTTP 5xx response',
         statusCode: reply.statusCode,
+        code: request._alertCode,
         requestId: request.id,
         path: (request.url ?? '').split('?')[0],
         method: request.method,
         userId: shortId(request.user?.id),
+        error: request._alertError,
         details: { ms },
       });
     }
+  });
+
+  // Capture thrown errors even when a route swallows Telegram elsewhere.
+  app.addHook('onError', async (request, _reply, err) => {
+    stashAlertError(
+      request,
+      err,
+      err instanceof AppError ? err.code : (err as { code?: string }).code,
+    );
   });
 
   // Optional lean boot for diagnosing Railway proxy hangs.
@@ -222,13 +272,20 @@ export async function buildApp() {
   await app.register(adminRoutes, { prefix: '/v1/admin' });
   await app.register(analyticsRoutes, { prefix: '/v1/analytics' });
 
-  app.addHook('onSend', async (_req, reply, payload) => {
+  app.addHook('onSend', async (req, reply, payload) => {
     reply.removeHeader('x-powered-by');
+    if (reply.statusCode >= 500 && req._alertError == null) {
+      const extracted = extractErrorFromPayload(payload);
+      if (extracted?.message) {
+        stashAlertError(req, extracted.message, extracted.code);
+      }
+    }
     return payload;
   });
 
   app.setErrorHandler((err, req, reply) => {
     if (err instanceof AppError) {
+      stashAlertError(req, err, err.code);
       req.log.warn(
         {
           event: 'http.app_error',
@@ -239,25 +296,6 @@ export async function buildApp() {
         },
         `http.app_error ${err.code ?? 'error'}`,
       );
-      if (
-        shouldTelegramAlert({
-          statusCode: err.statusCode,
-          code: err.code,
-        }) &&
-        !req._telegramAlerted
-      ) {
-        req._telegramAlerted = true;
-        notifyTelegram({
-          title: 'AppError',
-          statusCode: err.statusCode,
-          code: err.code,
-          requestId: req.id,
-          path: (req.url ?? '').split('?')[0],
-          method: req.method,
-          userId: shortId(req.user?.id),
-          error: err.message,
-        });
-      }
       return reply.status(err.statusCode).send({
         error: {
           message: err.message,
@@ -279,6 +317,7 @@ export async function buildApp() {
         },
       });
     }
+    stashAlertError(req, err, 'internal');
     req.log.error(
       {
         event: 'http.unhandled',
@@ -287,19 +326,6 @@ export async function buildApp() {
       },
       'http.unhandled',
     );
-    if (!req._telegramAlerted) {
-      req._telegramAlerted = true;
-      notifyTelegram({
-        title: 'Unhandled server error',
-        statusCode: 500,
-        code: 'internal',
-        requestId: req.id,
-        path: (req.url ?? '').split('?')[0],
-        method: req.method,
-        userId: shortId(req.user?.id),
-        error: err,
-      });
-    }
     return reply.status(500).send({
       error: {
         message: 'Internal server error',

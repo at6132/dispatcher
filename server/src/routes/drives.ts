@@ -13,6 +13,7 @@ import {
   acceptApplication,
   acceptDirectInvite,
   applyToDrive,
+  cancelDriveByPoster,
   clearApplications,
   completeDrive,
   confirmBalanceReceived,
@@ -479,6 +480,53 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
       return reply.send({ drive });
     } catch (err) {
       if (err instanceof AppError) {
+        return sendError(reply, err.statusCode, err.message, err.code);
+      }
+      throw err;
+    }
+  });
+
+  /** Poster takes down a job they posted (open / assigned / picked up → cancelled). */
+  app.post('/:id/cancel', async (request, reply) => {
+    const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
+    if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
+    try {
+      const user = requireUser(request);
+      await assertClientLimits(request, reply, {
+        name: 'drive_cancel',
+        ipLimit: 30,
+        userLimit: 20,
+        windowSec: 3600,
+        failClosed: true,
+      });
+      const result = await withIdempotency(
+        user.id,
+        request as never,
+        reply as never,
+        async () => {
+          const drive = await cancelDriveByPoster(user.id, params.data.id);
+          return { status: 200, body: { drive } };
+        },
+      );
+      logDomain(request.log, 'drives.cancel.ok', {
+        requestId: request.id,
+        userId: shortId(user.id),
+        driveId: shortId(params.data.id),
+      });
+      trackEvent({
+        name: 'drive.cancel',
+        userId: user.id,
+        requestId: request.id,
+        ip: request.ip,
+        props: { driveId: params.data.id },
+      });
+      return reply.status(result.status).send(result.body);
+    } catch (err) {
+      if (err instanceof AppError) {
+        logDomainWarn(request.log, 'drives.cancel.fail', {
+          requestId: request.id,
+          code: err.code,
+        });
         return sendError(reply, err.statusCode, err.message, err.code);
       }
       throw err;

@@ -6,7 +6,7 @@ Backend for the Dispatcher Expo app: auth, onboarding, **shared drives board**, 
 
 Stack: Node 22 + Fastify + Drizzle. Hosted on Railway. Expo app is the only client.
 
-Public URL (when deploy is healthy): `https://api-production-f4ac.up.railway.app`
+Public URL (when deploy is healthy): `https://dispatcher-production-31d1.up.railway.app`
 
 ## Domain (short)
 

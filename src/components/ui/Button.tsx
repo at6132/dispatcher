@@ -12,7 +12,7 @@ import {
 
 import { colors, elevation, fonts, motion, radius, space, type } from '../../theme';
 
-type ButtonVariant = 'primary' | 'ghost' | 'quiet';
+type ButtonVariant = 'primary' | 'ghost' | 'quiet' | 'danger';
 
 type ButtonProps = Omit<PressableProps, 'children' | 'style'> & {
   children: ReactNode;
@@ -43,7 +43,7 @@ export function Button({
   };
 
   return (
-    <Animated.View style={[{ transform: [{ scale }] }, variant === 'primary' && elevation.whisper]}>
+    <Animated.View style={[{ transform: [{ scale }] }, (variant === 'primary' || variant === 'danger') && elevation.whisper]}>
       <Pressable
         accessibilityRole="button"
         disabled={isDisabled}
@@ -52,6 +52,7 @@ export function Button({
           variant === 'primary' && styles.primary,
           variant === 'ghost' && styles.ghost,
           variant === 'quiet' && styles.quiet,
+          variant === 'danger' && styles.danger,
           isDisabled && styles.disabled,
           pressed && !isDisabled && styles.pressed,
           style,
@@ -68,7 +69,11 @@ export function Button({
       >
         {loading ? (
           <ActivityIndicator
-            color={variant === 'primary' ? colors.onAccent : colors.accent}
+            color={
+              variant === 'primary' || variant === 'danger'
+                ? colors.onAccent
+                : colors.accent
+            }
           />
         ) : (
           <Text
@@ -77,6 +82,7 @@ export function Button({
               variant === 'primary' && styles.primaryLabel,
               variant === 'ghost' && styles.ghostLabel,
               variant === 'quiet' && styles.quietLabel,
+              variant === 'danger' && styles.dangerLabel,
             ]}
           >
             {children}
@@ -106,6 +112,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.accentMuted,
     borderRadius: radius.control,
   },
+  danger: {
+    backgroundColor: colors.danger,
+    borderRadius: radius.control,
+  },
   pressed: {
     opacity: 0.92,
   },
@@ -126,5 +136,8 @@ const styles = StyleSheet.create({
   },
   quietLabel: {
     color: colors.inkSoft,
+  },
+  dangerLabel: {
+    color: colors.onAccent,
   },
 });

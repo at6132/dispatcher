@@ -71,7 +71,7 @@ function fingerprint(input: TelegramAlertInput): string {
     input.code ?? '',
     String(input.statusCode ?? ''),
     input.path ?? '',
-    String(input.error ?? '').slice(0, 120),
+    formatError(input.error).slice(0, 160),
   ].join('|');
   return createHash('sha256').update(raw).digest('hex').slice(0, 16);
 }
@@ -81,59 +81,125 @@ function truncate(s: string, max: number): string {
   return `${s.slice(0, max - 1)}…`;
 }
 
-function formatError(err: unknown): string {
-  if (err == null) return '';
-  let raw = '';
-  if (err instanceof Error) {
-    raw = `${err.name}: ${err.message}`;
-  } else {
-    raw = String(err);
-  }
-  // Strip common secret/PII patterns before leaving the trust boundary
-  raw = raw
+function redactSecrets(raw: string): string {
+  return raw
     .replace(/\b[\w.+-]+@[\w.-]+\.\w+\b/g, '[email]')
-    .replace(/\+?\d[\d\s().-]{8,}\d/g, '[phone]')
+    // Mask phones; keep pure floats (e.g. 0.0999… from JS) so PG errors stay readable.
+    .replace(/\+?\d[\d\s().-]{8,}\d/g, (match) =>
+      /^\d+\.\d+$/.test(match) ? match : '[phone]',
+    )
     .replace(/\beyJ[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\.[A-Za-z0-9_-]+\b/g, '[jwt]')
     .replace(/\bpostgres(?:ql)?:\/\/[^\s]+/gi, '[db]')
     .replace(/\bredis:\/\/[^\s]+/gi, '[redis]')
     .replace(/password[=:]\s*\S+/gi, 'password=[redacted]')
-    .replace(/detail:\s*.+$/gim, 'detail:[redacted]');
-  return truncate(raw, 280);
+    // PG "DETAIL:" often embeds row values — keep the label, drop the rest of the line
+    .replace(/\bDETAIL:\s*.+$/gim, 'DETAIL:[redacted]');
+}
+
+/** Pull a useful ops string from Error / pg / plain objects (message + stack + cause). */
+export function formatError(err: unknown): string {
+  if (err == null) return '';
+
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+
+  const walk = (value: unknown, depth: number) => {
+    if (value == null || depth > 4 || seen.has(value)) return;
+    if (typeof value === 'object') seen.add(value);
+
+    if (value instanceof Error) {
+      parts.push(`${value.name}: ${value.message}`);
+      const extra = value as Error & {
+        code?: string;
+        severity?: string;
+        constraint?: string;
+        table?: string;
+        column?: string;
+        detail?: string;
+        routine?: string;
+      };
+      const meta = [
+        extra.code ? `code=${extra.code}` : '',
+        extra.severity ? `severity=${extra.severity}` : '',
+        extra.table ? `table=${extra.table}` : '',
+        extra.column ? `column=${extra.column}` : '',
+        extra.constraint ? `constraint=${extra.constraint}` : '',
+        extra.routine ? `routine=${extra.routine}` : '',
+      ].filter(Boolean);
+      if (meta.length) parts.push(meta.join(' '));
+      // Avoid leaking row-level DETAIL; code/table/constraint above is enough
+      if (value.stack) {
+        parts.push(truncate(value.stack, 1600));
+      }
+      if (value.cause) walk(value.cause, depth + 1);
+      return;
+    }
+
+    if (typeof value === 'string') {
+      parts.push(value);
+      return;
+    }
+
+    if (typeof value === 'object') {
+      const obj = value as Record<string, unknown>;
+      if (typeof obj.message === 'string') {
+        const name = typeof obj.name === 'string' ? obj.name : 'Error';
+        parts.push(`${name}: ${obj.message}`);
+      }
+      if (typeof obj.code === 'string' || typeof obj.code === 'number') {
+        parts.push(`code=${String(obj.code)}`);
+      }
+      if (typeof obj.stack === 'string') {
+        parts.push(truncate(obj.stack, 1600));
+      }
+      if (obj.cause) walk(obj.cause, depth + 1);
+      if (parts.length === 0) {
+        try {
+          parts.push(truncate(JSON.stringify(obj), 800));
+        } catch {
+          parts.push(String(obj));
+        }
+      }
+      return;
+    }
+
+    parts.push(String(value));
+  };
+
+  walk(err, 0);
+  return truncate(redactSecrets(parts.filter(Boolean).join('\n')), 2800);
 }
 
 function buildMessage(input: TelegramAlertInput): string {
-  const lines: string[] = [
-    `🚨 *Dispatcher*`,
-    `*${escapeMd(input.title)}*`,
-  ];
-  if (input.statusCode != null) lines.push(`status: \`${input.statusCode}\``);
-  if (input.code) lines.push(`code: \`${escapeMd(input.code)}\``);
+  // Plain text — stacks / pg errors break Markdown parse_mode too often.
+  const lines: string[] = ['🚨 Dispatcher', input.title];
+  if (input.statusCode != null) lines.push(`status: ${input.statusCode}`);
+  if (input.code) lines.push(`code: ${input.code}`);
   if (input.method || input.path) {
     lines.push(
-      `route: \`${escapeMd([input.method, input.path].filter(Boolean).join(' '))}\``,
+      `route: ${[input.method, input.path].filter(Boolean).join(' ')}`,
     );
   }
-  if (input.requestId) lines.push(`requestId: \`${escapeMd(input.requestId)}\``);
-  if (input.userId) lines.push(`userId: \`${escapeMd(input.userId)}\``);
+  if (input.requestId) lines.push(`requestId: ${input.requestId}`);
+  if (input.userId) lines.push(`userId: ${input.userId}`);
   const errText = formatError(input.error);
-  if (errText) lines.push(`error: \`${escapeMd(errText)}\``);
+  if (errText) {
+    lines.push('error:');
+    lines.push(errText);
+  }
   if (input.details && Object.keys(input.details).length) {
     const detailStr = truncate(JSON.stringify(input.details), 600);
-    lines.push(`details: \`${escapeMd(detailStr)}\``);
+    lines.push(`details: ${detailStr}`);
   }
-  lines.push(`env: \`${env.NODE_ENV}\``);
-  return lines.join('\n');
-}
-
-/** Escape for Telegram MarkdownV2-ish (we use Markdown parse_mode). */
-function escapeMd(s: string): string {
-  return s.replace(/([_*`\[])/g, '\\$1');
+  lines.push(`env: ${env.NODE_ENV}`);
+  return truncate(lines.join('\n'), 3900);
 }
 
 async function sendToChat(
   token: string,
   chatId: string,
   text: string,
+  opts?: { parseMode?: 'Markdown' },
 ): Promise<void> {
   const url = `https://api.telegram.org/bot${token}/sendMessage`;
   const res = await fetch(url, {
@@ -142,7 +208,7 @@ async function sendToChat(
     body: JSON.stringify({
       chat_id: chatId,
       text,
-      parse_mode: 'Markdown',
+      ...(opts?.parseMode ? { parse_mode: opts.parseMode } : {}),
       disable_web_page_preview: true,
     }),
   });
@@ -255,7 +321,9 @@ export async function sendTelegramRaw(text: string): Promise<void> {
     const token = botToken();
     const ids = chatIds();
     if (!token || !ids.length) return;
-    await Promise.allSettled(ids.map((id) => sendToChat(token, id, text)));
+    await Promise.allSettled(
+      ids.map((id) => sendToChat(token, id, text, { parseMode: 'Markdown' })),
+    );
   } catch (err) {
     // eslint-disable-next-line no-console
     console.error(

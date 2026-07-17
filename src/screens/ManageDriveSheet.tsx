@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from 'react';
 import {
   ActivityIndicator,
+  Alert,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -16,6 +17,7 @@ import { X } from 'lucide-react-native';
 
 import {
   acceptApplication,
+  cancelDrive,
   clearApplications,
   listApplications,
   respondDriveCancel,
@@ -43,6 +45,7 @@ import { ChoiceGroup } from '../components/ui/ChoiceGroup';
 import { DriverCard } from '../components/ui/DriverCard';
 import { Icon } from '../components/ui/Icon';
 import { LoadingHint } from '../components/ui/LoadingHint';
+import { MapExpandProvider } from '../components/ui/MapExpand';
 import { NumberStepper } from '../components/ui/NumberStepper';
 import { TextField } from '../components/ui/TextField';
 import {
@@ -143,6 +146,7 @@ export function ManageDriveSheet({
   const [cancelResponding, setCancelResponding] = useState<
     'approve' | 'deny' | null
   >(null);
+  const [takingDown, setTakingDown] = useState(false);
 
   const fillDetails = useCallback((d: DriveListItem) => {
     setTitle(d.routeText);
@@ -277,7 +281,7 @@ export function ManageDriveSheet({
   };
 
   const requestClose = () => {
-    if (saving || acceptingId || clearing) return;
+    if (saving || acceptingId || clearing || takingDown) return;
     Keyboard.dismiss();
     onClose();
   };
@@ -384,6 +388,41 @@ export function ManageDriveSheet({
     }
   };
 
+  const onTakeDown = () => {
+    const target = drive ?? active;
+    if (!target) return;
+    const hasDriver =
+      target.status === 'assigned' || target.status === 'picked_up';
+    Alert.alert(
+      'Take down this post?',
+      hasDriver
+        ? 'The driver will be notified and the ride will be cancelled.'
+        : 'It leaves the board. Drivers can no longer apply.',
+      [
+        { text: 'Keep post', style: 'cancel' },
+        {
+          text: 'Take down',
+          style: 'destructive',
+          onPress: () => {
+            void (async () => {
+              setActionError(null);
+              setTakingDown(true);
+              try {
+                await cancelDrive(target.id);
+                onChanged();
+                onClose();
+              } catch (err) {
+                setActionError(mapApiError(err).message);
+              } finally {
+                setTakingDown(false);
+              }
+            })();
+          },
+        },
+      ],
+    );
+  };
+
   const titleError =
     submitted && title.trim().length < 2
       ? 'Enter a title like SF to Monticello'
@@ -395,12 +434,20 @@ export function ManageDriveSheet({
     submitted && !tripType ? 'Pick one way or round trip' : undefined;
 
   const busy =
-    saving || acceptingId != null || clearing || cancelResponding != null;
+    saving ||
+    acceptingId != null ||
+    clearing ||
+    cancelResponding != null ||
+    takingDown;
   const sheetDrive = drive ?? active;
 
   if (!sheetDrive || (!visible && !mounted)) return null;
 
   const isOpen = sheetDrive.status === 'open';
+  const canTakeDown =
+    sheetDrive.status === 'open' ||
+    sheetDrive.status === 'assigned' ||
+    sheetDrive.status === 'picked_up';
   const cancelPending = Boolean(sheetDrive.cancelRequestedAt);
   const pendingApps = apps.filter((a) => a.status === 'pending');
   const openSubmissions = apps.filter(
@@ -443,6 +490,7 @@ export function ManageDriveSheet({
       presentationStyle="overFullScreen"
       onRequestClose={requestClose}
     >
+      <MapExpandProvider>
       <View style={styles.root}>
         <MistBackdrop style={styles.fill} />
 
@@ -597,6 +645,7 @@ export function ManageDriveSheet({
                               availability={
                                 app.driver.availability ?? 'offline'
                               }
+                              midJob={app.midJob}
                               favorited={isFavorited(
                                 app.driver.id,
                                 app.favorited,
@@ -640,6 +689,18 @@ export function ManageDriveSheet({
                     <Text style={styles.formError} accessibilityRole="alert">
                       {actionError}
                     </Text>
+                  ) : null}
+                  {canTakeDown ? (
+                    <View style={styles.takeDownBlock}>
+                      <Button
+                        variant="danger"
+                        loading={takingDown}
+                        disabled={busy}
+                        onPress={onTakeDown}
+                      >
+                        Take down
+                      </Button>
+                    </View>
                   ) : null}
                 </View>
               ) : tab === 'status' && !isOpen ? (
@@ -761,6 +822,23 @@ export function ManageDriveSheet({
                       </Text>
                     </View>
                   )}
+                  {canTakeDown ? (
+                    <View style={styles.takeDownBlock}>
+                      <Button
+                        variant="danger"
+                        loading={takingDown}
+                        disabled={busy}
+                        onPress={onTakeDown}
+                      >
+                        Take down
+                      </Button>
+                    </View>
+                  ) : null}
+                  {actionError && !isOpen ? (
+                    <Text style={styles.formError} accessibilityRole="alert">
+                      {actionError}
+                    </Text>
+                  ) : null}
                 </View>
               ) : (
                 <View style={styles.section}>
@@ -882,6 +960,7 @@ export function ManageDriveSheet({
           </KeyboardAvoidingView>
         </View>
       </View>
+      </MapExpandProvider>
     </Modal>
   );
 }
@@ -1011,6 +1090,12 @@ const styles = StyleSheet.create({
     ...type.caption,
     color: colors.faint,
     textAlign: 'center',
+  },
+  takeDownBlock: {
+    paddingTop: space.lg,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.glassBorder,
+    marginTop: space.sm,
   },
   fields: {
     gap: space.lg,
