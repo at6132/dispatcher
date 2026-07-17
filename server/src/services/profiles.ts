@@ -3,7 +3,12 @@ import { and, asc, desc, eq, ne, sql } from 'drizzle-orm';
 import { db } from '../db/client.js';
 import { driverProfiles, drives, favorites, users } from '../db/schema.js';
 import { AppError } from '../lib/errors.js';
-import { toAuthUser, toPublicProfile, type PublicProfileDto } from './auth.js';
+import {
+  loadPublicProfiles,
+  toAuthUser,
+  toPublicProfile,
+  type PublicProfileDto,
+} from './auth.js';
 
 export type DriverAvailability = 'available' | 'busy' | 'offline';
 
@@ -50,17 +55,15 @@ export async function listDriverProfiles(
     // Favorites table not migrated yet — list still works
   }
 
+  const profiles = await loadPublicProfiles(pageRows.map((r) => r.id));
   const items: ProfileListItemDto[] = [];
   for (const row of pageRows) {
-    try {
-      const profile = await toPublicProfile(row.id);
-      items.push({
-        ...profile,
-        favorited: favSet.has(row.id),
-      });
-    } catch {
-      // Skip deleted / broken profiles
-    }
+    const profile = profiles.get(row.id);
+    if (!profile) continue;
+    items.push({
+      ...profile,
+      favorited: favSet.has(row.id),
+    });
   }
 
   items.sort((a, b) => {

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
+  FlatList,
+  Platform,
   Pressable,
   RefreshControl,
-  ScrollView,
   StyleSheet,
   Text,
   View,
@@ -93,7 +94,6 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
   const [tab, setTab] = useState<PeopleTab>('favorites');
   const [items, setItems] = useState<ProfileListItem[]>([]);
   const [favoriteItems, setFavoriteItems] = useState<ProfileListItem[]>([]);
-  const [offset, setOffset] = useState(0);
   const [nextOffset, setNextOffset] = useState<number | undefined>();
   const [loading, setLoading] = useState(true);
   const [pageLoading, setPageLoading] = useState(false);
@@ -140,8 +140,14 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
               ...item,
               favorited: Boolean(item.favorited),
             }));
-        setItems(next);
-        setOffset(pageOffset);
+        if (mode === 'page') {
+          setItems((prev) => {
+            const seen = new Set(prev.map((p) => p.id));
+            return [...prev, ...next.filter((p) => !seen.has(p.id))];
+          });
+        } else {
+          setItems(next);
+        }
         setNextOffset(fromBoardFallback ? undefined : more);
         if (viewerId) await refreshFavoriteTab();
         if (fromBoardFallback) {
@@ -157,17 +163,19 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
           const viewerId = user?.id ?? '';
           if (viewerId) {
             const next = await mergeProfilesWithLocal(viewerId, []);
-            setItems(next);
+            if (mode !== 'page') setItems(next);
             await refreshFavoriteTab();
-          } else {
+          } else if (mode !== 'page') {
             setItems([]);
             setFavoriteItems([]);
           }
         } catch {
-          setItems([]);
-          setFavoriteItems([]);
+          if (mode !== 'page') {
+            setItems([]);
+            setFavoriteItems([]);
+          }
         }
-        setNextOffset(undefined);
+        if (mode !== 'page') setNextOffset(undefined);
         setError(mapApiError(err).message);
       } finally {
         setLoading(false);
@@ -253,32 +261,17 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
   }, [items, query, vehicleFilter]);
 
   const listItems = tab === 'favorites' ? favoriteItems : filteredAll;
-  const pageNumber = Math.floor(offset / PAGE_SIZE) + 1;
-  const showPager =
-    tab === 'all' &&
-    !loading &&
-    (offset > 0 || nextOffset != null);
 
-  return (
-    <>
-    <ScrollView
-      style={styles.scroll}
-      contentContainerStyle={[
-        styles.content,
-        {
-          paddingTop: insets.top + space.xxl,
-          paddingBottom: bottomNavClearance(insets.bottom) + space.lg,
-        },
-      ]}
-      keyboardShouldPersistTaps="handled"
-      refreshControl={
-        <RefreshControl
-          refreshing={refreshing}
-          onRefresh={() => void load('refresh', 0)}
-          tintColor={colors.accent}
-        />
-      }
-    >
+  const canLoadMore =
+    tab === 'all' && nextOffset != null && !loading && !pageLoading;
+
+  const onEndReached = useCallback(() => {
+    if (!canLoadMore || nextOffset == null) return;
+    void load('page', nextOffset);
+  }, [canLoadMore, load, nextOffset]);
+
+  const listHeader = (
+    <View style={styles.headerBlock}>
       <View style={styles.hero}>
         <Text style={styles.eyebrow}>Drivers</Text>
         <Text style={styles.title}>
@@ -330,74 +323,102 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
         </View>
       ) : null}
 
-      {loading && !refreshing ? (
-        <LoadingHint label="Loading drivers…" variant="block" />
-      ) : error && items.length === 0 && favoriteItems.length === 0 ? (
-        <View style={styles.stateBlock}>
-          <Text style={styles.errorText}>{error}</Text>
-          <Button variant="ghost" onPress={() => void load('initial', 0)}>
-            Try again
-          </Button>
-        </View>
-      ) : listItems.length === 0 ? (
-        <View style={styles.stateBlock}>
-          {error ? <Text style={styles.inlineError}>{error}</Text> : null}
-          <Text style={styles.empty}>
-            {tab === 'favorites'
-              ? 'No favorites yet. Open All, then tap the heart on drivers you trust.'
-              : query.trim() || vehicleFilter !== 'any'
-                ? 'No drivers match that search.'
-                : 'No other drivers on the board yet.'}
-          </Text>
-          {tab === 'favorites' ? (
-            <Button variant="ghost" onPress={() => setTab('all')}>
-              Browse all drivers
-            </Button>
-          ) : null}
-        </View>
-      ) : (
-        <View style={styles.list}>
-          {error ? <Text style={styles.inlineError}>{error}</Text> : null}
-          {listItems.map((item) => (
-            <ProfileRow
-              key={item.id}
-              item={item}
-              toggling={togglingId === item.id}
-              onOpen={() => openProfile(item.id, item)}
-              onToggleFavorite={() => void onToggleFavorite(item)}
-              onSend={() => onSendDirect(toSendTarget(item))}
-            />
-          ))}
-          {showPager ? (
-            <View style={styles.pager}>
-              <Text style={styles.pageLabel}>Page {pageNumber}</Text>
-              <View style={styles.pagerActions}>
-                <Button
-                  variant="ghost"
-                  disabled={pageLoading || offset <= 0}
-                  onPress={() =>
-                    void load('page', Math.max(0, offset - PAGE_SIZE))
-                  }
-                >
-                  Previous
-                </Button>
-                <Button
-                  variant="ghost"
-                  disabled={pageLoading || nextOffset == null}
-                  loading={pageLoading}
-                  onPress={() => {
-                    if (nextOffset != null) void load('page', nextOffset);
-                  }}
-                >
-                  Next page
-                </Button>
-              </View>
-            </View>
-          ) : null}
-        </View>
+      {error && listItems.length > 0 ? (
+        <Text style={styles.inlineError}>{error}</Text>
+      ) : null}
+    </View>
+  );
+
+  const listEmpty = loading && !refreshing ? (
+    <LoadingHint label="Loading drivers…" variant="block" />
+  ) : error && items.length === 0 && favoriteItems.length === 0 ? (
+    <View style={styles.stateBlock}>
+      <Text style={styles.errorText}>{error}</Text>
+      <Button variant="ghost" onPress={() => void load('initial', 0)}>
+        Try again
+      </Button>
+    </View>
+  ) : (
+    <View style={styles.stateBlock}>
+      {error ? <Text style={styles.inlineError}>{error}</Text> : null}
+      <Text style={styles.empty}>
+        {tab === 'favorites'
+          ? 'No favorites yet. Open All, then tap the heart on drivers you trust.'
+          : query.trim() || vehicleFilter !== 'any'
+            ? 'No drivers match that search.'
+            : 'No other drivers on the board yet.'}
+      </Text>
+      {tab === 'favorites' ? (
+        <Button variant="ghost" onPress={() => setTab('all')}>
+          Browse all drivers
+        </Button>
+      ) : null}
+    </View>
+  );
+
+  const listFooter =
+    tab === 'all' && nextOffset != null ? (
+      <View style={styles.footer}>
+        <Button
+          variant="ghost"
+          disabled={pageLoading}
+          loading={pageLoading}
+          onPress={() => {
+            if (nextOffset != null && !pageLoading) {
+              void load('page', nextOffset);
+            }
+          }}
+        >
+          Load more
+        </Button>
+      </View>
+    ) : pageLoading ? (
+      <View style={styles.footer}>
+        <LoadingHint label="Loading more…" variant="block" />
+      </View>
+    ) : (
+      <View style={styles.footerSpacer} />
+    );
+
+  return (
+    <FlatList
+      style={styles.scroll}
+      data={loading && !refreshing ? [] : listItems}
+      keyExtractor={(item) => item.id}
+      initialNumToRender={10}
+      windowSize={7}
+      removeClippedSubviews={Platform.OS === 'android' ? true : undefined}
+      keyboardShouldPersistTaps="handled"
+      onEndReached={onEndReached}
+      onEndReachedThreshold={0.4}
+      ItemSeparatorComponent={ProfileListSeparator}
+      ListHeaderComponent={listHeader}
+      ListEmptyComponent={listEmpty}
+      ListFooterComponent={listFooter}
+      contentContainerStyle={[
+        styles.content,
+        {
+          paddingTop: insets.top + space.xxl,
+          paddingBottom: bottomNavClearance(insets.bottom) + space.lg,
+        },
+      ]}
+      refreshControl={
+        <RefreshControl
+          refreshing={refreshing}
+          onRefresh={() => void load('refresh', 0)}
+          tintColor={colors.accent}
+        />
+      }
+      renderItem={({ item }) => (
+        <ProfileRow
+          item={item}
+          toggling={togglingId === item.id}
+          onOpen={() => openProfile(item.id, item)}
+          onToggleFavorite={() => void onToggleFavorite(item)}
+          onSend={() => onSendDirect(toSendTarget(item))}
+        />
       )}
-    </ScrollView>
-    </>
+    />
   );
 }
 
@@ -489,13 +510,21 @@ function ProfileRow({
   );
 }
 
+function ProfileListSeparator() {
+  return <View style={styles.sep} />;
+}
+
 const styles = StyleSheet.create({
   scroll: {
     flex: 1,
   },
   content: {
     paddingHorizontal: space.lg,
+    flexGrow: 1,
+  },
+  headerBlock: {
     gap: space.lg,
+    marginBottom: space.lg,
   },
   hero: {
     gap: space.sm,
@@ -560,23 +589,16 @@ const styles = StyleSheet.create({
     ...type.body,
     color: colors.muted,
   },
-  list: {
-    gap: space.md,
-  },
-  pager: {
-    gap: space.sm,
-    paddingTop: space.sm,
+  footer: {
+    paddingTop: space.md,
     paddingBottom: space.xs,
+    alignItems: 'center',
   },
-  pageLabel: {
-    ...type.caption,
-    color: colors.muted,
-    textAlign: 'center',
+  footerSpacer: {
+    height: space.sm,
   },
-  pagerActions: {
-    flexDirection: 'row',
-    justifyContent: 'center',
-    gap: space.sm,
+  sep: {
+    height: space.md,
   },
   rowCard: {
     borderRadius: radius.lg,

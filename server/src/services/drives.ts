@@ -64,6 +64,14 @@ function canSeePassenger(drive: {
  * Whether another job blocks apply/accept for `forScheduledAt`.
  * Future jobs (≥30 min out) never block. Imminent ones only conflict with
  * mid-ride or another imminent assigned job.
+ *
+ * Call sites MUST hold `driver:${driverId}:schedule` (via withAssignmentLocks)
+ * across this check-then-assign. Migration 0019 dropped
+ * drives_one_active_assignee_uidx so multiple future assigned jobs are allowed;
+ * the remaining DB unique index only covers picked_up. Without a driver-scoped
+ * lock, two concurrent accepts on different imminent drives can both pass this
+ * check before either commits — a real double-booking with no DB backstop.
+ * Do not "simplify" away the driver lock.
  */
 const FUTURE_SCHEDULE_MS = 30 * 60 * 1000;
 
@@ -109,6 +117,23 @@ async function findBlockingAssignment(
     if (isImminent(row.scheduledAt)) return row;
   }
   return null;
+}
+
+/**
+ * Driver schedule lock first, then per-drive lock.
+ * Always this order so two accepts for the same driver on different drives
+ * cannot deadlock (A waits on B's drive while B waits on A's drive after each
+ * already holds the other's driver lock — impossible when driver is outer).
+ */
+async function withAssignmentLocks<T>(
+  driverId: string,
+  driveId: string,
+  driveLock: 'apply' | 'mutate',
+  fn: () => Promise<T>,
+): Promise<T> {
+  return withLock(`driver:${driverId}:schedule`, () =>
+    withLock(`drive:${driveId}:${driveLock}`, fn),
+  );
 }
 
 function parseScheduledAt(raw?: string): Date {
@@ -781,7 +806,7 @@ export async function applyToDrive(
     throw new AppError(403, 'Complete onboarding first', 'onboarding_required');
   }
 
-  const result = await withLock(`drive:${driveId}:apply`, async () =>
+  const result = await withAssignmentLocks(driverId, driveId, 'apply', async () =>
     db.transaction(async (tx) => {
       const [drive] = await tx
         .select()
@@ -1024,7 +1049,7 @@ export async function acceptDirectInvite(
   driverId: string,
   driveId: string,
 ): Promise<DriveDto> {
-  return withLock(`drive:${driveId}:mutate`, async () =>
+  return withAssignmentLocks(driverId, driveId, 'mutate', async () =>
     db.transaction(async (tx) => {
       const [drive] = await tx
         .select()
@@ -1159,9 +1184,25 @@ export async function acceptApplication(
   driveId: string,
   applicationId: string,
 ): Promise<DriveDto> {
-  const dto = await withLock(`drive:${driveId}:mutate`, async () =>
+  // Peek driver id so we can take driver:schedule before drive:mutate
+  // (withAssignmentLocks order). Re-validated inside the transaction.
+  const [preview] = await db
+    .select({ driverId: applications.driverId })
+    .from(applications)
+    .where(
+      and(eq(applications.id, applicationId), eq(applications.driveId, driveId)),
+    )
+    .limit(1);
+  if (!preview) {
+    throw new AppError(404, 'Application not found', 'application_not_found');
+  }
+
+  const dto = await withAssignmentLocks(
+    preview.driverId,
+    driveId,
+    'mutate',
+    async () =>
     db.transaction(async (tx) => {
-      // Lock drive first (consistent order → no deadlocks with unassign/complete)
       const [drive] = await tx
         .select()
         .from(drives)
@@ -1207,6 +1248,9 @@ export async function acceptApplication(
         .for('update');
       if (!app || app.status !== 'pending') {
         throw new AppError(404, 'Application not found', 'application_not_found');
+      }
+      if (app.driverId !== preview.driverId) {
+        throw new AppError(409, 'Application already handled', 'application_conflict');
       }
 
       const busy = await findBlockingAssignment(tx, app.driverId, {
