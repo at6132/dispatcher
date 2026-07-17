@@ -33,6 +33,7 @@ import { getProfile } from '../api/profiles';
 import type { AddOrigin } from '../components/navigation/BottomNav';
 import { Button } from '../components/ui/Button';
 import { ChoiceGroup } from '../components/ui/ChoiceGroup';
+import { DateTimeField } from '../components/ui/DateTimeField';
 import { DriverCard } from '../components/ui/DriverCard';
 import { Icon } from '../components/ui/Icon';
 import { LoadingHint } from '../components/ui/LoadingHint';
@@ -132,6 +133,7 @@ export function CreateDriveSheet({
   );
   const [seats, setSeats] = useState(user?.onboarding?.seats ?? 4);
   const [tripType, setTripType] = useState<TripChoice | null>(null);
+  const [scheduledAt, setScheduledAt] = useState(() => new Date());
   const [address, setAddress] = useState('');
   const [extraInfo, setExtraInfo] = useState('');
   const [submitted, setSubmitted] = useState(false);
@@ -160,6 +162,7 @@ export function CreateDriveSheet({
     setVehicleClass(user?.onboarding?.vehicleClass ?? null);
     setSeats(user?.onboarding?.seats ?? 4);
     setTripType(null);
+    setScheduledAt(new Date());
     setAddress('');
     setExtraInfo('');
     setSubmitted(false);
@@ -268,6 +271,7 @@ export function CreateDriveSheet({
         vehicleClass,
         seats,
         tripType,
+        scheduledAt: scheduledAt.toISOString(),
         ...(address.trim() ? { address: address.trim() } : {}),
         ...(extraInfo.trim() ? { extraInfo: extraInfo.trim() } : {}),
         ...(directTo ? { inviteDriverId: directTo.id } : {}),
@@ -478,6 +482,12 @@ export function CreateDriveSheet({
                     value={tripType}
                     onChange={setTripType}
                     error={tripError}
+                  />
+                  <DateTimeField
+                    label="When"
+                    value={scheduledAt}
+                    onChange={setScheduledAt}
+                    editable={!submitting}
                   />
                   <TextField
                     label="Address (optional)"

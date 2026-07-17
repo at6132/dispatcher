@@ -1,5 +1,6 @@
 import { useEffect, useState } from 'react';
-import { StyleSheet, View } from 'react-native';
+import { StyleSheet, Text, View } from 'react-native';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import type { DriveListItem } from '../api/drives';
 import type { DirectSendTarget } from '../api/profiles';
@@ -11,7 +12,8 @@ import {
 import { MapExpandProvider } from '../components/ui/MapExpand';
 import { ProfileViewerProvider } from '../profiles/ProfileViewerContext';
 import { syncPushRegistration } from '../notifications/registerPush';
-import { MistBackdrop } from '../theme';
+import { useNetwork } from '../network/NetworkContext';
+import { MistBackdrop, colors, type } from '../theme';
 import { BankScreen } from './BankScreen';
 import { CreateDriveSheet } from './CreateDriveSheet';
 import { HomeScreen } from './HomeScreen';
@@ -23,6 +25,8 @@ import { ProfilesScreen } from './ProfilesScreen';
  * Authenticated shell after onboarding — Home / People / Bank / You + center add.
  */
 export function MainShell() {
+  const insets = useSafeAreaInsets();
+  const { isConnected } = useNetwork();
   const [tab, setTab] = useState<MainTab>('home');
   const [composeOpen, setComposeOpen] = useState(false);
   const [addOrigin, setAddOrigin] = useState<AddOrigin | null>(null);
@@ -52,6 +56,14 @@ export function MainShell() {
       <ProfileViewerProvider onSendDirect={(target) => openCompose(null, target)}>
         <MapExpandProvider>
           <View style={styles.root}>
+            {!isConnected ? (
+              <View
+                pointerEvents="none"
+                style={[styles.offlineBanner, { paddingTop: insets.top }]}
+              >
+                <Text style={styles.offlineText}>No connection</Text>
+              </View>
+            ) : null}
             <View style={styles.page}>
               {tab === 'home' ? (
                 <HomeScreen
@@ -103,5 +115,21 @@ const styles = StyleSheet.create({
   },
   page: {
     flex: 1,
+  },
+  offlineBanner: {
+    position: 'absolute',
+    zIndex: 20,
+    top: 0,
+    right: 0,
+    left: 0,
+    alignItems: 'center',
+    paddingBottom: 4,
+    backgroundColor: colors.canvasDeep,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: colors.danger,
+  },
+  offlineText: {
+    ...type.label,
+    color: colors.inkSoft,
   },
 });

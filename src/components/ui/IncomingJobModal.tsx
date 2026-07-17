@@ -171,6 +171,18 @@ export function IncomingJobModal({
 
           <View style={styles.metaBlock}>
             <MetaRow label="From" value={posterName} />
+            {drive.scheduledAt ? (
+              <MetaRow
+                label="When"
+                value={new Date(drive.scheduledAt).toLocaleString(undefined, {
+                  weekday: 'short',
+                  month: 'short',
+                  day: 'numeric',
+                  hour: 'numeric',
+                  minute: '2-digit',
+                })}
+              />
+            ) : null}
             {tripLabel ? <MetaRow label="Trip" value={tripLabel} /> : null}
             {classLabel ? (
               <MetaRow

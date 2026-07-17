@@ -10,6 +10,7 @@ import {
   telegramAlertsEnabled,
 } from './lib/telegram.js';
 import { startLatencyAlertsWorker } from './workers/latencyAlerts.js';
+import { startScheduledReminderWorker } from './workers/scheduledReminders.js';
 import { startSundayLockWorker } from './workers/sundayLock.js';
 import { startTelegramAdminWorker } from './workers/telegramAdmin.js';
 
@@ -30,12 +31,14 @@ async function main() {
 
   let worker: NodeJS.Timeout | undefined;
   let latencyWorker: NodeJS.Timeout | undefined;
+  let reminderWorker: NodeJS.Timeout | undefined;
   let tgAdmin: { stop: () => void } | undefined;
 
   const shutdown = async (signal: string) => {
     app.log.info({ event: 'boot.shutdown', signal }, 'boot.shutdown');
     if (worker) clearInterval(worker);
     if (latencyWorker) clearInterval(latencyWorker);
+    if (reminderWorker) clearInterval(reminderWorker);
     tgAdmin?.stop();
     await app.close();
     await closeRedis();
@@ -99,6 +102,7 @@ async function main() {
   setTimeout(() => {
     worker = startSundayLockWorker(app.log);
     latencyWorker = startLatencyAlertsWorker(app.log);
+    reminderWorker = startScheduledReminderWorker(app.log);
     tgAdmin = startTelegramAdminWorker(app.log);
   }, 1500);
 }

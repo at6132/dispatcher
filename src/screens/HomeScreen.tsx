@@ -47,6 +47,7 @@ import { IncomingJobModal } from '../components/ui/IncomingJobModal';
 import { LoadingHint } from '../components/ui/LoadingHint';
 import { driverMatchesOpenDrive } from '../drives/matchDrive';
 import { useDriverLocation } from '../location/LocationContext';
+import { useNetwork } from '../network/NetworkContext';
 import { useProfileViewer } from '../profiles/ProfileViewerContext';
 import { GlassSurface, colors, fonts, radius, space, type } from '../theme';
 
@@ -65,6 +66,7 @@ const BOARDS: {
 ];
 
 const BOARD_COUNT = BOARDS.length;
+const PAGE_SIZE = 50;
 
 const AVAILABILITY_OPTIONS: {
   value: DriverAvailability;
@@ -98,16 +100,22 @@ type BoardState = {
   items: DriveListItem[];
   loading: boolean;
   refreshing: boolean;
+  pageLoading: boolean;
   error: string | null;
   loaded: boolean;
+  offset: number;
+  nextOffset?: number;
 };
 
 const emptyBoard = (): BoardState => ({
   items: [],
   loading: false,
   refreshing: false,
+  pageLoading: false,
   error: null,
   loaded: false,
+  offset: 0,
+  nextOffset: undefined,
 });
 
 type ActiveSection = {
@@ -162,6 +170,7 @@ export function HomeScreen({
   const insets = useSafeAreaInsets();
   const { user, updatePresence } = useAuth();
   const { refreshLocation } = useDriverLocation();
+  const { isConnected } = useNetwork();
   const { openProfile } = useProfileViewer();
   const pagerRef = useRef<ComponentRef<typeof Animated.ScrollView>>(null);
   const { width: pageWidth } = useWindowDimensions();
@@ -196,7 +205,7 @@ export function HomeScreen({
   const mutationKeysRef = useRef(new Map<string, string>());
 
   const pollOffers = useCallback(async () => {
-    if (!user?.id || offersPollStoppedRef.current) return;
+    if (!isConnected || !user?.id || offersPollStoppedRef.current) return;
     try {
       const offers = await listDirectOffers({
         viewerId: user.id,
@@ -214,7 +223,7 @@ export function HomeScreen({
       }
       // Older APIs / offline — no offer popup
     }
-  }, [user?.id]);
+  }, [isConnected, user?.id]);
 
   const onSetAvailability = async (availability: DriverAvailability) => {
     if (!user) return;
@@ -245,18 +254,27 @@ export function HomeScreen({
   };
 
   const loadBoard = useCallback(
-    async (board: DriveBoard, mode: 'initial' | 'refresh' = 'initial') => {
+    async (
+      board: DriveBoard,
+      mode: 'initial' | 'refresh' | 'page' = 'initial',
+      pageOffset = 0,
+    ) => {
       setBoards((prev) => ({
         ...prev,
         [board]: {
           ...prev[board],
           loading: mode === 'initial' && !prev[board].loaded,
           refreshing: mode === 'refresh',
+          pageLoading: mode === 'page',
           error: null,
         },
       }));
       try {
-        const result = await listDrives(board, { limit: 50 });
+        const useOffsetPaging = board === 'open';
+        const result = await listDrives(board, {
+          limit: PAGE_SIZE,
+          ...(useOffsetPaging ? { offset: pageOffset } : {}),
+        });
         const capacity = user?.onboarding
           ? {
               vehicleClass: user.onboarding.vehicleClass,
@@ -277,8 +295,11 @@ export function HomeScreen({
             items,
             loading: false,
             refreshing: false,
+            pageLoading: false,
             error: null,
             loaded: true,
+            offset: useOffsetPaging ? pageOffset : 0,
+            nextOffset: useOffsetPaging ? result.nextOffset : undefined,
           },
         }));
         if (board === 'open') {
@@ -302,8 +323,10 @@ export function HomeScreen({
             ...prev[board],
             loading: false,
             refreshing: false,
+            pageLoading: false,
             error: mapApiError(err).message,
             loaded: prev[board].loaded,
+            ...(mode === 'page' ? {} : { nextOffset: undefined }),
           },
         }));
       }
@@ -316,9 +339,12 @@ export function HomeScreen({
   }, [index, loadBoard, refreshToken]);
 
   useEffect(() => {
-    offersPollStoppedRef.current = false;
-    void pollOffers();
+    if (isConnected) {
+      offersPollStoppedRef.current = false;
+      void pollOffers();
+    }
     const id = setInterval(() => {
+      if (!isConnected) return;
       if (offersPollStoppedRef.current) {
         clearInterval(id);
         return;
@@ -326,7 +352,7 @@ export function HomeScreen({
       void pollOffers();
     }, 8_000);
     return () => clearInterval(id);
-  }, [pollOffers, refreshToken]);
+  }, [isConnected, pollOffers, refreshToken]);
 
   useEffect(() => {
     const timers = BOARDS.map((b, i) =>
@@ -747,10 +773,16 @@ export function HomeScreen({
           const refresh = (
             <RefreshControl
               refreshing={state.refreshing}
-              onRefresh={() => void loadBoard(b.key, 'refresh')}
+              onRefresh={() => void loadBoard(b.key, 'refresh', 0)}
               tintColor={colors.accent}
             />
           );
+          const openPageNumber = Math.floor(state.offset / PAGE_SIZE) + 1;
+          const showOpenPager =
+            b.key === 'open' &&
+            state.loaded &&
+            !state.loading &&
+            (state.offset > 0 || state.nextOffset != null);
 
           return (
             <View key={b.key} style={[styles.page, { width: pageWidth }]}>
@@ -833,6 +865,48 @@ export function HomeScreen({
                       <Text style={styles.applyError} accessibilityRole="alert">
                         {applyError.message}
                       </Text>
+                    ) : null
+                  }
+                  ListFooterComponent={
+                    showOpenPager ? (
+                      <View style={styles.pagePager}>
+                        <Text style={styles.pageLabel}>
+                          Page {openPageNumber}
+                        </Text>
+                        <View style={styles.pagerActions}>
+                          <Button
+                            variant="ghost"
+                            disabled={state.pageLoading || state.offset <= 0}
+                            onPress={() =>
+                              void loadBoard(
+                                'open',
+                                'page',
+                                Math.max(0, state.offset - PAGE_SIZE),
+                              )
+                            }
+                          >
+                            Previous
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            disabled={
+                              state.pageLoading || state.nextOffset == null
+                            }
+                            loading={state.pageLoading}
+                            onPress={() => {
+                              if (state.nextOffset != null) {
+                                void loadBoard(
+                                  'open',
+                                  'page',
+                                  state.nextOffset,
+                                );
+                              }
+                            }}
+                          >
+                            Next page
+                          </Button>
+                        </View>
+                      </View>
                     ) : null
                   }
                   renderItem={({ item }) => renderDriveCard(item, b.key)}
@@ -1032,6 +1106,21 @@ const styles = StyleSheet.create({
     color: colors.danger,
     marginBottom: space.md,
     paddingHorizontal: space.xs,
+  },
+  pagePager: {
+    gap: space.sm,
+    paddingTop: space.lg,
+    paddingBottom: space.xs,
+  },
+  pageLabel: {
+    ...type.caption,
+    color: colors.muted,
+    textAlign: 'center',
+  },
+  pagerActions: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: space.sm,
   },
 });
 

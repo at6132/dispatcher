@@ -11,7 +11,12 @@ import {
   tokenBucketKey,
 } from '../lib/security.js';
 import { recordSecurityEvent } from '../lib/securityEvents.js';
+import { claimAlertOnce, trackDistinctInWindow } from '../lib/redis.js';
 import * as auth from '../services/auth.js';
+
+/** Distinct phones per IP before credential-stuffing alert (tunable). */
+const CREDENTIAL_STUFFING_PHONE_THRESHOLD = 5;
+const CREDENTIAL_STUFFING_WINDOW_SEC = 3600;
 
 export const authRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', async (request) => {
@@ -139,6 +144,33 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
       throw err;
     }
 
+    // Credential-stuffing signal: many distinct phones from one IP (additive;
+    // does not replace login:ip / login:phone rate limits above).
+    const distinctPhones = await trackDistinctInWindow({
+      key: `distinct_phones:ip:${request.ip}`,
+      member: phoneKey,
+      windowSec: CREDENTIAL_STUFFING_WINDOW_SEC,
+    });
+    if (distinctPhones >= CREDENTIAL_STUFFING_PHONE_THRESHOLD) {
+      const shouldAlert = await claimAlertOnce({
+        key: `credential_stuffing:ip:${request.ip}`,
+        ttlSec: CREDENTIAL_STUFFING_WINDOW_SEC,
+      });
+      if (shouldAlert) {
+        recordSecurityEvent({
+          kind: 'credential_stuffing_suspected',
+          severity: 'critical',
+          alert: true,
+          ip: request.ip,
+          requestId: request.id,
+          detail: {
+            distinctPhonesAttempted: distinctPhones,
+            windowSec: CREDENTIAL_STUFFING_WINDOW_SEC,
+          },
+        });
+      }
+    }
+
     try {
       const tokens = await auth.login(body.data);
       logDomain(request.log, 'auth.login.ok', {
@@ -218,7 +250,10 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
     }
 
     try {
-      const tokens = await auth.refresh(body.data.refreshToken);
+      const tokens = await auth.refresh(body.data.refreshToken, {
+        ip: request.ip,
+        requestId: request.id,
+      });
       logDomain(request.log, 'auth.refresh.ok', {
         requestId: request.id,
         userId: shortId(tokens.user.id),

@@ -210,6 +210,34 @@ export function notifyApplicationAccepted(input: {
   });
 }
 
+/** Driver: 15‑min heads-up before a scheduled assigned drive. */
+export function notifyScheduledDriveReminder(input: {
+  driverId: string;
+  posterId: string;
+  driveId: string;
+  routeText: string;
+  scheduledAt: Date;
+}) {
+  fireAndForget('scheduled_drive_reminder', async () => {
+    const ok = await shouldNotify(
+      input.driverId,
+      'applicationAccepted',
+      input.posterId,
+    );
+    if (!ok) return;
+    const time = input.scheduledAt.toLocaleTimeString(undefined, {
+      hour: 'numeric',
+      minute: '2-digit',
+    });
+    await notifyUser(
+      input.driverId,
+      'Drive starting soon',
+      `${input.routeText} · ${time}`,
+      { type: 'scheduled_drive_reminder', driveId: input.driveId },
+    );
+  });
+}
+
 /**
  * Drivers: poster cleared submissions on a drive they applied to.
  * `favorites` = only favorited posters.

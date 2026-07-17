@@ -49,7 +49,7 @@ export type DriveCardProps = {
   onPickedUp?: (driveId: string) => void;
   /** Active board — complete after pickup (picked_up). */
   onComplete?: (drive: DriveListItem) => void;
-  /** Active board — assignee requests cancel (needs poster approve). */
+  /** Active board — assignee requests cancel before pickup (needs poster approve). */
   onRequestCancel?: (driveId: string) => void;
   /** Open the other party’s full profile. */
   onOpenProfile?: (userId: string) => void;
@@ -104,6 +104,34 @@ function formatWhen(iso: string, withTime = false): string {
     minute: '2-digit',
   });
   return `${date} · ${time}`;
+}
+
+function formatSchedule(iso: string, now = new Date()): string {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  const time = d.toLocaleTimeString(undefined, {
+    hour: 'numeric',
+    minute: '2-digit',
+  });
+  const sameDay =
+    d.getFullYear() === now.getFullYear() &&
+    d.getMonth() === now.getMonth() &&
+    d.getDate() === now.getDate();
+  const soon = d.getTime() - now.getTime() < 90_000 && d.getTime() >= now.getTime() - 60_000;
+  if (soon) return `Now · ${time}`;
+  if (sameDay) return `Today · ${time}`;
+  const date = d.toLocaleDateString(undefined, {
+    weekday: 'short',
+    month: 'short',
+    day: 'numeric',
+  });
+  return `${date} · ${time}`;
+}
+
+function isScheduledLater(iso: string, now = new Date()): boolean {
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return false;
+  return d.getTime() - now.getTime() >= 2 * 60 * 1000;
 }
 
 async function openUrl(url: string) {
@@ -291,10 +319,15 @@ function DriveCardComponent({
         : null;
   const vehicleHint = party?.onboarding?.vehicleType?.trim();
   const historyMeta = tripNumber != null;
+  const scheduleIso = drive.scheduledAt ?? drive.createdAt;
+  const scheduledLater = isScheduledLater(scheduleIso);
   const whenIso = drive.completedAt ?? drive.updatedAt ?? drive.createdAt;
+  const whenLabel = historyMeta
+    ? formatWhen(whenIso, true)
+    : formatSchedule(scheduleIso);
   const meta = [
     historyMeta ? `Trip ${tripNumber}` : null,
-    formatWhen(whenIso, historyMeta),
+    whenLabel,
     drive.costCents != null ? formatMoney(drive.costCents) : null,
     classLabel && drive.seats != null
       ? `${classLabel} · ${drive.seats} seats`
@@ -317,7 +350,7 @@ function DriveCardComponent({
   const showRequestCancel =
     onRequestCancel != null &&
     isAssignee &&
-    (drive.status === 'assigned' || drive.status === 'picked_up');
+    drive.status === 'assigned';
   const showManagePrimary =
     onManage != null && isPoster && !showPickedUp && !showComplete;
   const showManageSecondary =
@@ -411,11 +444,15 @@ function DriveCardComponent({
     }).start();
   };
 
-  const statusBadge = (placement: 'inline' | 'onMap' = 'inline') => (
+  const statusBadge = (placement: 'inline' | 'onMap' = 'inline') => {
+    const label =
+      drive.status === 'open' && scheduledLater ? 'Scheduled' : status;
+    return (
     <View
       style={[
         styles.badge,
         drive.status === 'open' && styles.badgeOpen,
+        drive.status === 'open' && scheduledLater && styles.badgeScheduled,
         drive.status === 'assigned' && styles.badgeAssigned,
         drive.status === 'picked_up' && styles.badgePickedUp,
         drive.status === 'completed' && styles.badgeCompleted,
@@ -426,22 +463,26 @@ function DriveCardComponent({
         style={[
           styles.badgeLabel,
           drive.status === 'open' && styles.badgeLabelOpen,
+          drive.status === 'open' && scheduledLater && styles.badgeLabelScheduled,
           drive.status === 'assigned' && styles.badgeLabelAssigned,
           drive.status === 'picked_up' && styles.badgeLabelPickedUp,
           drive.status === 'completed' && styles.badgeLabelCompleted,
           placement === 'onMap' && styles.badgeLabelLifted,
         ]}
       >
-        {status}
+        {label}
       </Text>
     </View>
-  );
+    );
+  };
 
   return (
     <View
       style={[styles.card, showMap && styles.cardWithMap]}
       accessibilityRole="summary"
-      accessibilityLabel={`${drive.routeText}, ${status}`}
+      accessibilityLabel={`${drive.routeText}, ${
+        drive.status === 'open' && scheduledLater ? 'Scheduled' : status
+      }, ${whenLabel}`}
     >
       {showMap ? (
         <MapPreview
@@ -591,7 +632,10 @@ function DriveCardComponent({
             </View>
           )}
           {meta ? (
-            <Text style={styles.meta} numberOfLines={1}>
+            <Text
+              style={[styles.meta, scheduledLater && !historyMeta && styles.metaSchedule]}
+              numberOfLines={2}
+            >
               {meta}
             </Text>
           ) : null}
@@ -863,6 +907,7 @@ function driveCardPropsAreEqual(
   return (
     prev.drive.id === next.drive.id &&
     prev.drive.status === next.drive.status &&
+    prev.drive.scheduledAt === next.drive.scheduledAt &&
     prev.drive.viewerApplicationStatus === next.drive.viewerApplicationStatus &&
     prev.drive.cancelRequestedAt === next.drive.cancelRequestedAt &&
     prev.drive.poster?.onboarding?.selfPhotoKey ===
@@ -949,6 +994,9 @@ const styles = StyleSheet.create({
   badgeOpen: {
     backgroundColor: 'rgba(127, 168, 148, 0.18)',
   },
+  badgeScheduled: {
+    backgroundColor: 'rgba(176, 194, 204, 0.2)',
+  },
   badgeAssigned: {
     backgroundColor: 'rgba(176, 194, 204, 0.22)',
   },
@@ -965,6 +1013,9 @@ const styles = StyleSheet.create({
   },
   badgeLabelOpen: {
     color: colors.success,
+  },
+  badgeLabelScheduled: {
+    color: colors.accent,
   },
   badgeLabelAssigned: {
     color: colors.inkSoft,
@@ -1033,6 +1084,10 @@ const styles = StyleSheet.create({
     ...type.caption,
     color: colors.muted,
     paddingLeft: space.xs,
+  },
+  metaSchedule: {
+    fontFamily: fonts.sansMedium,
+    color: colors.inkSoft,
   },
   ctaStack: {
     gap: space.sm,

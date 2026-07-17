@@ -66,6 +66,8 @@ export type Drive = {
   waitMinutes?: number;
   completeNote?: string;
   hiddenByPoster: boolean;
+  /** When the drive should start (ISO). */
+  scheduledAt?: string;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -84,6 +86,8 @@ export type CreateDriveInput = {
   tripType: TripType;
   address?: string;
   extraInfo?: string;
+  /** ISO datetime — defaults to now on the server. */
+  scheduledAt?: string;
   /** Offer directly to this driver (they accept/decline). */
   inviteDriverId?: string;
 };
@@ -102,6 +106,7 @@ export type DriveBoard = 'open' | 'active' | 'history';
 export type ListDrivesResult = {
   items: DriveListItem[];
   nextCursor?: string;
+  nextOffset?: number;
 };
 
 function boardQuery(board: DriveBoard): string {
@@ -131,15 +136,18 @@ function asListItem(raw: Drive & { poster?: PublicProfile; assignee?: PublicProf
 
 export async function listDrives(
   board: DriveBoard,
-  opts?: { limit?: number; cursor?: string },
+  opts?: { limit?: number; cursor?: string; offset?: number },
 ): Promise<ListDrivesResult> {
   const params = new URLSearchParams(boardQuery(board));
   if (opts?.limit != null) params.set('limit', String(opts.limit));
   if (opts?.cursor) params.set('cursor', opts.cursor);
+  // Offset mode (incl. 0) so the API returns nextOffset like People.
+  if (opts?.offset != null) params.set('offset', String(opts.offset));
   const data = await apiFetch<ListDrivesResult>(`/v1/drives?${params.toString()}`);
   return {
     items: (data.items ?? []).map(asListItem),
     ...(data.nextCursor ? { nextCursor: data.nextCursor } : {}),
+    ...(data.nextOffset != null ? { nextOffset: data.nextOffset } : {}),
   };
 }
 

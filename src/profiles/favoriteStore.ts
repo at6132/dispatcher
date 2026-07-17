@@ -112,3 +112,33 @@ export async function mergeProfilesWithLocal(
   await rememberProfiles(merged);
   return merged;
 }
+
+/** Stamp local favorite flags onto a page without pulling the whole directory. */
+export async function stampLocalFavorites(
+  viewerId: string,
+  serverItems: ProfileListItem[],
+): Promise<ProfileListItem[]> {
+  const localFavs = await getLocalFavoriteIds(viewerId);
+  const stamped = serverItems.map((item) => ({
+    ...item,
+    favorited: Boolean(item.favorited) || localFavs.has(item.id),
+  }));
+  await rememberProfiles(stamped);
+  return stamped;
+}
+
+/** Favorites tab: remembered faces marked favorited (survives pagination). */
+export async function listLocalFavorites(
+  viewerId: string,
+): Promise<ProfileListItem[]> {
+  const localFavs = await getLocalFavoriteIds(viewerId);
+  const remembered = await getRememberedProfiles();
+  return remembered
+    .filter(
+      (item) =>
+        item.id !== viewerId &&
+        (Boolean(item.favorited) || localFavs.has(item.id)),
+    )
+    .map((item) => ({ ...item, favorited: true }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}

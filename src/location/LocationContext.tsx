@@ -27,7 +27,7 @@ type LocationContextValue = {
 const LocationContext = createContext<LocationContextValue | null>(null);
 
 export function LocationProvider({ children }: { children: ReactNode }) {
-  const { status, user, updatePresence } = useAuth();
+  const { status, user } = useAuth();
   const [location, setLocation] = useState<DriverLocation | null>(null);
 
   const refreshLocation = useCallback(() => getDriverLocation(), []);
@@ -61,7 +61,6 @@ export function LocationProvider({ children }: { children: ReactNode }) {
         ) {
           return;
         }
-        await updatePresence({ lat: next.lat, lng: next.lng });
       } catch (err) {
         logger.warn('location', 'foreground_sync_failed', {
           err: err instanceof Error ? err.message : String(err),
@@ -82,7 +81,6 @@ export function LocationProvider({ children }: { children: ReactNode }) {
     user?.id,
     user?.onboardingComplete,
     user?.availability,
-    updatePresence,
   ]);
 
   const value = useMemo(

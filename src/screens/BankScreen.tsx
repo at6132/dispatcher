@@ -49,6 +49,8 @@ type PlatformFeeGroup = {
   status: 'open' | 'payment_pending';
 };
 
+const PLATFORM_ZELLE = '8624244236';
+
 function formatUsd(cents: number) {
   return new Intl.NumberFormat('en-US', {
     style: 'currency',
@@ -351,6 +353,9 @@ export function BankScreen() {
                         {formatUsd(g.amountCents)}
                       </Text>
                     </View>
+                    <Text style={styles.rowDetail}>
+                      Zelle {formatPhoneDisplay(PLATFORM_ZELLE)}
+                    </Text>
                     <Text style={styles.rowHint}>
                       {g.status === 'payment_pending'
                         ? 'Sent — waiting for confirmation that we received it.'

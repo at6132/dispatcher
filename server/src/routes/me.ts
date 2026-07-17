@@ -4,8 +4,9 @@ import { z } from 'zod';
 
 import { db } from '../db/client.js';
 import { users } from '../db/schema.js';
-import { AppError, sendError } from '../lib/errors.js';
 import { trackEvent } from '../lib/analytics.js';
+import { writeAudit } from '../lib/audit.js';
+import { AppError, sendError } from '../lib/errors.js';
 import { logDomain, logDomainWarn, shortId } from '../lib/log.js';
 import { assertClientLimits, requireJsonContentType } from '../lib/security.js';
 import { requireAuth, requireUser } from '../middleware/auth.js';
@@ -95,6 +96,16 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
         .set({ name, updatedAt: new Date() })
         .where(eq(users.id, user.id));
       const dto = await toAuthUser(user.id);
+      writeAudit({
+        actorType: 'user',
+        actorId: user.id,
+        action: 'me.profile_name',
+        entityType: 'user',
+        entityId: user.id,
+        requestId: request.id,
+        ip: request.ip,
+        after: { name },
+      });
       logDomain(request.log, 'me.patch.ok', {
         requestId: request.id,
         userId: shortId(dto.id),
@@ -129,6 +140,19 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
         failClosed: true,
       });
       const dto = await updatePresence(user.id, body.data);
+      writeAudit({
+        actorType: 'user',
+        actorId: user.id,
+        action: 'me.presence',
+        entityType: 'user',
+        entityId: user.id,
+        requestId: request.id,
+        ip: request.ip,
+        after: {
+          availability: dto.availability,
+          ...(body.data.lat != null ? { latUpdated: true } : {}),
+        },
+      });
       return reply.send({ user: dto });
     } catch (err) {
       if (err instanceof AppError) {
@@ -417,6 +441,16 @@ export const meRoutes: FastifyPluginAsync = async (app) => {
         ip: request.ip,
       });
       await deleteAccount(user.id);
+      writeAudit({
+        actorType: 'user',
+        actorId: user.id,
+        action: 'account.delete',
+        entityType: 'user',
+        entityId: user.id,
+        requestId: request.id,
+        ip: request.ip,
+        meta: { deleted: true },
+      });
       logDomain(request.log, 'me.delete.ok', {
         requestId: request.id,
         userId: shortId(user.id),

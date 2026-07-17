@@ -43,6 +43,7 @@ import {
 } from '../auth/validation';
 import { Button } from '../components/ui/Button';
 import { ChoiceGroup } from '../components/ui/ChoiceGroup';
+import { DateTimeField } from '../components/ui/DateTimeField';
 import { DriverCard } from '../components/ui/DriverCard';
 import { Icon } from '../components/ui/Icon';
 import { LoadingHint } from '../components/ui/LoadingHint';
@@ -139,6 +140,7 @@ export function ManageDriveSheet({
   const [vehicleClass, setVehicleClass] = useState<VehicleClass | null>(null);
   const [seats, setSeats] = useState(4);
   const [tripType, setTripType] = useState<TripChoice | null>(null);
+  const [scheduledAt, setScheduledAt] = useState(() => new Date());
   const [address, setAddress] = useState('');
   const [extraInfo, setExtraInfo] = useState('');
   const [submitted, setSubmitted] = useState(false);
@@ -164,6 +166,9 @@ export function ManageDriveSheet({
     setVehicleClass(d.vehicleClass ?? null);
     setSeats(d.seats ?? 4);
     setTripType(d.tripType ?? null);
+    setScheduledAt(
+      d.scheduledAt ? new Date(d.scheduledAt) : new Date(d.createdAt),
+    );
     setAddress(d.address ?? '');
     setExtraInfo(d.extraInfo ?? '');
     setSubmitted(false);
@@ -371,6 +376,7 @@ export function ManageDriveSheet({
         vehicleClass,
         seats,
         tripType,
+        scheduledAt: scheduledAt.toISOString(),
         ...(address.trim() ? { address: address.trim() } : {}),
         ...(extraInfo.trim() ? { extraInfo: extraInfo.trim() } : {}),
       });
@@ -391,6 +397,7 @@ export function ManageDriveSheet({
     seats,
     address,
     extraInfo,
+    scheduledAt,
     onChanged,
   ]);
 
@@ -433,8 +440,7 @@ export function ManageDriveSheet({
   const onTakeDown = useCallback(() => {
     const target = drive ?? active;
     if (!target) return;
-    const hasDriver =
-      target.status === 'assigned' || target.status === 'picked_up';
+    const hasDriver = target.status === 'assigned';
     Alert.alert(
       'Take down this post?',
       hasDriver
@@ -522,9 +528,7 @@ export function ManageDriveSheet({
 
   const isOpen = sheetDrive.status === 'open';
   const canTakeDown =
-    sheetDrive.status === 'open' ||
-    sheetDrive.status === 'assigned' ||
-    sheetDrive.status === 'picked_up';
+    sheetDrive.status === 'open' || sheetDrive.status === 'assigned';
   const cancelPending = Boolean(sheetDrive.cancelRequestedAt);
   const detailsLocked = !isOpen || openSubmissions.length > 0;
   const tabs: { key: ManageTab; label: string }[] = isOpen
@@ -782,9 +786,7 @@ export function ManageDriveSheet({
                     ) : null}
                   </View>
 
-                  {cancelPending &&
-                  (sheetDrive.status === 'assigned' ||
-                    sheetDrive.status === 'picked_up') ? (
+                  {cancelPending && sheetDrive.status === 'assigned' ? (
                     <View style={styles.cancelBanner}>
                       <Text style={styles.cancelTitle}>Driver wants to cancel</Text>
                       <Text style={styles.cancelBody}>
@@ -973,6 +975,12 @@ export function ManageDriveSheet({
                       value={tripType}
                       onChange={setTripType}
                       error={tripError}
+                    />
+                    <DateTimeField
+                      label="When"
+                      value={scheduledAt}
+                      onChange={setScheduledAt}
+                      editable={!busy && !detailsLocked}
                     />
                     <TextField
                       label="Address (optional)"

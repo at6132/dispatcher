@@ -145,6 +145,12 @@ export const drives = pgTable(
     waitMinutes: integer('wait_minutes'),
     completeNote: text('complete_note'),
     hiddenByPoster: boolean('hidden_by_poster').notNull().default(false),
+    /** When the drive should start — defaults to now (asap). */
+    scheduledAt: timestamp('scheduled_at', { withTimezone: true })
+      .notNull()
+      .defaultNow(),
+    /** Set when the 15‑min-before reminder push was sent. */
+    reminderSentAt: timestamp('reminder_sent_at', { withTimezone: true }),
     completedAt: timestamp('completed_at', { withTimezone: true }),
     /** Set when assignee requests cancel; poster must approve/deny. */
     cancelRequestedAt: timestamp('cancel_requested_at', { withTimezone: true }),
@@ -159,11 +165,11 @@ export const drives = pgTable(
     index('drives_status_created_idx').on(t.status, t.createdAt),
     index('drives_poster_idx').on(t.posterId),
     index('drives_assignee_idx').on(t.assigneeId),
-    uniqueIndex('drives_one_active_assignee_uidx')
+    index('drives_scheduled_at_idx').on(t.scheduledAt),
+    /** At most one mid-ride; future assigned jobs may stack beside it. */
+    uniqueIndex('drives_one_picked_up_assignee_uidx')
       .on(t.assigneeId)
-      .where(
-        sql`${t.assigneeId} IS NOT NULL AND ${t.status} IN ('assigned', 'picked_up')`,
-      ),
+      .where(sql`${t.assigneeId} IS NOT NULL AND ${t.status} = 'picked_up'`),
     index('drives_invited_driver_idx').on(t.invitedDriverId),
   ],
 );

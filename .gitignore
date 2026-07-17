@@ -42,6 +42,10 @@ server/.env
 server/dist/
 server/node_modules/
 
+# load-test tokens + reports (contain JWTs)
+load/tokens/
+load/reports/
+
 # generated native folders
 /ios
 /android

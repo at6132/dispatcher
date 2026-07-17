@@ -1,8 +1,18 @@
 import type { FastifyReply, FastifyRequest } from 'fastify';
 
+import { env } from '../config/env.js';
 import { AppError } from './errors.js';
 import { rateLimit } from './redis.js';
 import { sha256 } from './crypto.js';
+
+/** True when load-test harness presents the configured bypass secret. */
+export function isLoadTestRequest(request: FastifyRequest): boolean {
+  const secret = env.LOAD_TEST_BYPASS_SECRET;
+  if (!secret) return false;
+  const header = request.headers['x-load-test'];
+  const value = Array.isArray(header) ? header[0] : header;
+  return typeof value === 'string' && value === secret;
+}
 
 export type RateLimitOpts = {
   /** Logical bucket, e.g. `login:ip` — full redis key is built for you */
@@ -45,15 +55,19 @@ export async function assertClientLimits(
     failClosed?: boolean;
   },
 ): Promise<void> {
-  await assertRateLimit(
-    {
-      key: `${buckets.name}:ip:${request.ip}`,
-      limit: buckets.ipLimit,
-      windowSec: buckets.windowSec,
-      failClosed: buckets.failClosed,
-    },
-    reply,
-  );
+  // Load-test bots share one egress IP — skip IP bucket so capacity matches
+  // real multi-IP traffic. Per-user ceilings still enforce realistic abuse caps.
+  if (!isLoadTestRequest(request)) {
+    await assertRateLimit(
+      {
+        key: `${buckets.name}:ip:${request.ip}`,
+        limit: buckets.ipLimit,
+        windowSec: buckets.windowSec,
+        failClosed: buckets.failClosed,
+      },
+      reply,
+    );
+  }
   if (buckets.userLimit != null && request.user?.id) {
     await assertRateLimit(
       {

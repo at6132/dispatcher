@@ -60,19 +60,34 @@ async function harvestProfilesFromBoard(
 }
 
 /**
- * Full driver directory. Falls back to board faces when the profiles
- * list route isn’t deployed yet (older production builds).
+ * Driver directory (50 per page). Falls back to board faces when the
+ * profiles list route isn’t deployed yet (older production builds).
  */
 export async function listProfiles(opts?: {
   viewerId?: string;
-}): Promise<{ items: ProfileListItem[]; fromBoardFallback: boolean }> {
+  limit?: number;
+  offset?: number;
+}): Promise<{
+  items: ProfileListItem[];
+  nextOffset?: number;
+  fromBoardFallback: boolean;
+}> {
+  const limit = opts?.limit ?? 50;
+  const offset = opts?.offset ?? 0;
   try {
-    const data = await apiFetch<{ items: ProfileListItem[] }>('/v1/profiles');
+    const params = new URLSearchParams();
+    params.set('limit', String(limit));
+    if (offset > 0) params.set('offset', String(offset));
+    const data = await apiFetch<{
+      items: ProfileListItem[];
+      nextOffset?: number;
+    }>(`/v1/profiles?${params.toString()}`);
     return {
       items: (data.items ?? []).map((item) => ({
         ...item,
         favorited: Boolean(item.favorited),
       })),
+      ...(data.nextOffset != null ? { nextOffset: data.nextOffset } : {}),
       fromBoardFallback: false,
     };
   } catch (err) {

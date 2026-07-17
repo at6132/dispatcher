@@ -29,6 +29,7 @@ import { MainShell } from './src/screens/MainShell';
 import { DevicePermissionsScreen } from './src/screens/onboarding/DevicePermissionsScreen';
 import { OnboardingScreen } from './src/screens/onboarding/OnboardingScreen';
 import { LocationProvider } from './src/location/LocationContext';
+import { NetworkProvider } from './src/network/NetworkContext';
 import { colors } from './src/theme';
 
 function Root() {
@@ -136,21 +137,23 @@ export default function App() {
 
   return (
     <SafeAreaProvider initialMetrics={initialWindowMetrics}>
-      <AuthProvider>
-        <LocationProvider>
-          {fontsReady ? (
-            <>
-              <Root />
-              <StatusBar style="light" />
-            </>
-          ) : (
-            <View style={styles.boot}>
-              <LoadingHint label="Loading…" variant="block" />
-              <StatusBar style="light" />
-            </View>
-          )}
-        </LocationProvider>
-      </AuthProvider>
+      <NetworkProvider>
+        <AuthProvider>
+          <LocationProvider>
+            {fontsReady ? (
+              <>
+                <Root />
+                <StatusBar style="light" />
+              </>
+            ) : (
+              <View style={styles.boot}>
+                <LoadingHint label="Loading…" variant="block" />
+                <StatusBar style="light" />
+              </View>
+            )}
+          </LocationProvider>
+        </AuthProvider>
+      </NetworkProvider>
     </SafeAreaProvider>
   );
 }

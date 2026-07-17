@@ -31,9 +31,11 @@ import { Icon } from '../components/ui/Icon';
 import { LoadingHint } from '../components/ui/LoadingHint';
 import { TextField } from '../components/ui/TextField';
 import {
+  listLocalFavorites,
   mergeProfilesWithLocal,
   rememberProfiles,
   setLocalFavorite,
+  stampLocalFavorites,
 } from '../profiles/favoriteStore';
 import { useProfileViewer } from '../profiles/ProfileViewerContext';
 import { GlassSurface, colors, fonts, radius, space, type } from '../theme';
@@ -45,6 +47,8 @@ type PeopleTab = 'favorites' | 'all';
 type ProfilesScreenProps = {
   onSendDirect: (target: DirectSendTarget) => void;
 };
+
+const PAGE_SIZE = 50;
 
 const VEHICLE_FILTER_OPTIONS: { value: VehicleClass | 'any'; label: string }[] =
   [{ value: 'any', label: 'Any' }, ...VEHICLE_CLASS_OPTIONS];
@@ -88,7 +92,11 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
   const { openProfile, favoriteEpoch } = useProfileViewer();
   const [tab, setTab] = useState<PeopleTab>('favorites');
   const [items, setItems] = useState<ProfileListItem[]>([]);
+  const [favoriteItems, setFavoriteItems] = useState<ProfileListItem[]>([]);
+  const [offset, setOffset] = useState(0);
+  const [nextOffset, setNextOffset] = useState<number | undefined>();
   const [loading, setLoading] = useState(true);
+  const [pageLoading, setPageLoading] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [togglingId, setTogglingId] = useState<string | null>(null);
@@ -97,23 +105,45 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
     'any',
   );
 
+  const refreshFavoriteTab = useCallback(async () => {
+    const viewerId = user?.id ?? '';
+    if (!viewerId) {
+      setFavoriteItems([]);
+      return;
+    }
+    setFavoriteItems(await listLocalFavorites(viewerId));
+  }, [user?.id]);
+
   const load = useCallback(
-    async (mode: 'initial' | 'refresh' = 'initial') => {
+    async (
+      mode: 'initial' | 'refresh' | 'page' = 'initial',
+      pageOffset = 0,
+    ) => {
       if (mode === 'refresh') setRefreshing(true);
+      else if (mode === 'page') setPageLoading(true);
       else setLoading(true);
       setError(null);
       try {
-        const { items: remote, fromBoardFallback } = await listProfiles({
+        const {
+          items: remote,
+          nextOffset: more,
+          fromBoardFallback,
+        } = await listProfiles({
           viewerId: user?.id,
+          limit: PAGE_SIZE,
+          offset: pageOffset,
         });
         const viewerId = user?.id ?? '';
         const next = viewerId
-          ? await mergeProfilesWithLocal(viewerId, remote)
+          ? await stampLocalFavorites(viewerId, remote)
           : remote.map((item) => ({
               ...item,
               favorited: Boolean(item.favorited),
             }));
         setItems(next);
+        setOffset(pageOffset);
+        setNextOffset(fromBoardFallback ? undefined : more);
+        if (viewerId) await refreshFavoriteTab();
         if (fromBoardFallback) {
           setError(
             next.length === 0
@@ -125,29 +155,36 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
         // Still surface local favorites / remembered faces
         try {
           const viewerId = user?.id ?? '';
-          const next = viewerId
-            ? await mergeProfilesWithLocal(viewerId, [])
-            : [];
-          setItems(next);
+          if (viewerId) {
+            const next = await mergeProfilesWithLocal(viewerId, []);
+            setItems(next);
+            await refreshFavoriteTab();
+          } else {
+            setItems([]);
+            setFavoriteItems([]);
+          }
         } catch {
           setItems([]);
+          setFavoriteItems([]);
         }
+        setNextOffset(undefined);
         setError(mapApiError(err).message);
       } finally {
         setLoading(false);
         setRefreshing(false);
+        setPageLoading(false);
       }
     },
-    [user?.id],
+    [refreshFavoriteTab, user?.id],
   );
 
   useEffect(() => {
-    void load('initial');
+    void load('initial', 0);
   }, [load]);
 
   useEffect(() => {
     if (favoriteEpoch > 0) {
-      void load('refresh');
+      void load('refresh', 0);
     }
   }, [favoriteEpoch, load]);
 
@@ -159,6 +196,15 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
     setItems((prev) =>
       prev.map((p) => (p.id === item.id ? updated : p)),
     );
+    setFavoriteItems((prev) => {
+      if (next) {
+        const without = prev.filter((p) => p.id !== item.id);
+        return [...without, updated].sort((a, b) =>
+          a.name.localeCompare(b.name),
+        );
+      }
+      return prev.filter((p) => p.id !== item.id);
+    });
     try {
       await setLocalFavorite(user.id, item.id, next);
       await rememberProfiles([updated]);
@@ -172,15 +218,11 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
           p.id === item.id ? { ...p, favorited: item.favorited } : p,
         ),
       );
+      await refreshFavoriteTab();
     } finally {
       setTogglingId(null);
     }
   };
-
-  const favorites = useMemo(
-    () => items.filter((i) => i.favorited),
-    [items],
-  );
 
   const filteredAll = useMemo(() => {
     const q = query.trim().toLowerCase();
@@ -210,7 +252,12 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
     });
   }, [items, query, vehicleFilter]);
 
-  const listItems = tab === 'favorites' ? favorites : filteredAll;
+  const listItems = tab === 'favorites' ? favoriteItems : filteredAll;
+  const pageNumber = Math.floor(offset / PAGE_SIZE) + 1;
+  const showPager =
+    tab === 'all' &&
+    !loading &&
+    (offset > 0 || nextOffset != null);
 
   return (
     <>
@@ -227,7 +274,7 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
       refreshControl={
         <RefreshControl
           refreshing={refreshing}
-          onRefresh={() => void load('refresh')}
+          onRefresh={() => void load('refresh', 0)}
           tintColor={colors.accent}
         />
       }
@@ -285,10 +332,10 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
 
       {loading && !refreshing ? (
         <LoadingHint label="Loading drivers…" variant="block" />
-      ) : error && items.length === 0 ? (
+      ) : error && items.length === 0 && favoriteItems.length === 0 ? (
         <View style={styles.stateBlock}>
           <Text style={styles.errorText}>{error}</Text>
-          <Button variant="ghost" onPress={() => void load('initial')}>
+          <Button variant="ghost" onPress={() => void load('initial', 0)}>
             Try again
           </Button>
         </View>
@@ -321,6 +368,32 @@ export function ProfilesScreen({ onSendDirect }: ProfilesScreenProps) {
               onSend={() => onSendDirect(toSendTarget(item))}
             />
           ))}
+          {showPager ? (
+            <View style={styles.pager}>
+              <Text style={styles.pageLabel}>Page {pageNumber}</Text>
+              <View style={styles.pagerActions}>
+                <Button
+                  variant="ghost"
+                  disabled={pageLoading || offset <= 0}
+                  onPress={() =>
+                    void load('page', Math.max(0, offset - PAGE_SIZE))
+                  }
+                >
+                  Previous
+                </Button>
+                <Button
+                  variant="ghost"
+                  disabled={pageLoading || nextOffset == null}
+                  loading={pageLoading}
+                  onPress={() => {
+                    if (nextOffset != null) void load('page', nextOffset);
+                  }}
+                >
+                  Next page
+                </Button>
+              </View>
+            </View>
+          ) : null}
         </View>
       )}
     </ScrollView>
@@ -489,6 +562,21 @@ const styles = StyleSheet.create({
   },
   list: {
     gap: space.md,
+  },
+  pager: {
+    gap: space.sm,
+    paddingTop: space.sm,
+    paddingBottom: space.xs,
+  },
+  pageLabel: {
+    ...type.caption,
+    color: colors.muted,
+    textAlign: 'center',
+  },
+  pagerActions: {
+    flexDirection: 'row',
+    justifyContent: 'center',
+    gap: space.sm,
   },
   rowCard: {
     borderRadius: radius.lg,

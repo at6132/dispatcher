@@ -242,7 +242,7 @@
     "/v1/drives/{id}/cancel": {
       "post": {
         "security": [{ "bearerAuth": [] }],
-        "summary": "Poster takes down a drive (open/assigned/picked_up → cancelled)",
+        "summary": "Poster takes down a drive (open/assigned → cancelled; not after pickup)",
         "responses": { "200": { "description": "OK" } }
       }
     },

@@ -61,33 +61,88 @@ function canSeePassenger(drive: {
 }
 
 /**
- * Assignee's active job, if any.
- * Defaults to both assigned + picked_up (the one-job invariant). Pass a
- * narrower `statuses` to only block on some states — e.g. applying is allowed
- * once you're mid-ride (picked_up), so the apply path passes ['assigned'].
+ * Whether another job blocks apply/accept for `forScheduledAt`.
+ * Future jobs (≥30 min out) never block. Imminent ones only conflict with
+ * mid-ride or another imminent assigned job.
  */
-async function findActiveAssignment(
+const FUTURE_SCHEDULE_MS = 30 * 60 * 1000;
+
+function isFutureScheduled(scheduledAt: Date, now = new Date()): boolean {
+  return scheduledAt.getTime() - now.getTime() >= FUTURE_SCHEDULE_MS;
+}
+
+function isImminent(scheduledAt: Date, now = new Date()): boolean {
+  return scheduledAt.getTime() - now.getTime() < FUTURE_SCHEDULE_MS;
+}
+
+async function findBlockingAssignment(
   tx: Pick<typeof db, 'select'>,
   driverId: string,
-  opts?: {
+  opts: {
     excludeDriveId?: string;
+    forScheduledAt: Date;
+    /** Apply only cares about assigned (mid-ride already allowed). */
     statuses?: ('assigned' | 'picked_up')[];
   },
 ) {
-  const statuses = opts?.statuses ?? ['assigned', 'picked_up'];
+  if (isFutureScheduled(opts.forScheduledAt)) return null;
+
+  const statuses = opts.statuses ?? ['assigned', 'picked_up'];
   const conditions = [
     eq(drives.assigneeId, driverId),
     inArray(drives.status, statuses),
   ];
-  if (opts?.excludeDriveId) {
+  if (opts.excludeDriveId) {
     conditions.push(ne(drives.id, opts.excludeDriveId));
   }
-  const [row] = await tx
-    .select({ id: drives.id, status: drives.status })
+  const rows = await tx
+    .select({
+      id: drives.id,
+      status: drives.status,
+      scheduledAt: drives.scheduledAt,
+    })
     .from(drives)
-    .where(and(...conditions))
-    .limit(1);
-  return row ?? null;
+    .where(and(...conditions));
+
+  for (const row of rows) {
+    if (row.status === 'picked_up') return row;
+    if (isImminent(row.scheduledAt)) return row;
+  }
+  return null;
+}
+
+function parseScheduledAt(raw?: string): Date {
+  const now = new Date();
+  if (raw == null || raw.trim() === '') return now;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) {
+    throw new AppError(400, 'Enter a valid time', 'invalid_scheduled_at');
+  }
+  // Allow a little clock skew; otherwise require now-or-future.
+  if (d.getTime() < now.getTime() - 60_000) {
+    throw new AppError(
+      400,
+      'Scheduled time can’t be in the past',
+      'invalid_scheduled_at',
+    );
+  }
+  const maxAhead = 30 * 24 * 60 * 60 * 1000;
+  if (d.getTime() > now.getTime() + maxAhead) {
+    throw new AppError(
+      400,
+      'Scheduled time is too far ahead',
+      'invalid_scheduled_at',
+    );
+  }
+  // Clamp slight past skew up to now
+  return d.getTime() < now.getTime() ? now : d;
+}
+
+/** Skip the 15‑min reminder when the job is already nearly due. */
+function reminderSentAtForSchedule(scheduledAt: Date, now = new Date()): Date | null {
+  const msUntil = scheduledAt.getTime() - now.getTime();
+  if (msUntil <= 15 * 60 * 1000) return now;
+  return null;
 }
 
 /** Driver ids (from the given set) who are currently mid-ride (picked_up). */
@@ -132,6 +187,7 @@ export type DriveDto = {
   waitMinutes?: number;
   completeNote?: string;
   hiddenByPoster: boolean;
+  scheduledAt: string;
   createdAt: string;
   updatedAt: string;
   completedAt?: string;
@@ -179,6 +235,7 @@ function mapDrive(
     ...(row.waitMinutes != null ? { waitMinutes: row.waitMinutes } : {}),
     ...(row.completeNote ? { completeNote: row.completeNote } : {}),
     hiddenByPoster: row.hiddenByPoster,
+    scheduledAt: row.scheduledAt.toISOString(),
     createdAt: row.createdAt.toISOString(),
     updatedAt: row.updatedAt.toISOString(),
     ...(row.completedAt ? { completedAt: row.completedAt.toISOString() } : {}),
@@ -228,6 +285,8 @@ export async function createDrive(
     extraInfo?: string;
     fromPlace?: string;
     toPlace?: string;
+    /** ISO datetime — defaults to now. */
+    scheduledAt?: string;
     /** Offer directly to this driver — private until they accept/decline. */
     inviteDriverId?: string;
   },
@@ -269,6 +328,7 @@ export async function createDrive(
   if (extraInfo && extraInfo.length > 1000) {
     throw new AppError(400, 'Extra info is too long', 'invalid_extra_info');
   }
+  const scheduledAt = parseScheduledAt(input.scheduledAt);
 
   const inviteDriverId = input.inviteDriverId?.trim() || undefined;
   if (inviteDriverId) {
@@ -301,6 +361,7 @@ export async function createDrive(
           extraInfo,
           fromPlace: input.fromPlace?.trim() || undefined,
           toPlace: input.toPlace?.trim() || undefined,
+          scheduledAt,
           invitedDriverId: inviteDriverId,
           status: 'open',
         })
@@ -333,6 +394,7 @@ export async function createDrive(
       extraInfo,
       fromPlace: input.fromPlace?.trim() || undefined,
       toPlace: input.toPlace?.trim() || undefined,
+      scheduledAt,
     })
     .returning();
   if (!row) throw new AppError(500, 'Could not create drive', 'create_failed');
@@ -358,6 +420,7 @@ export async function updateDrive(
     extraInfo?: string;
     fromPlace?: string;
     toPlace?: string;
+    scheduledAt?: string;
   },
 ): Promise<DriveDto> {
   const [existing] = await db
@@ -425,6 +488,10 @@ export async function updateDrive(
   if (extraInfo && extraInfo.length > 1000) {
     throw new AppError(400, 'Extra info is too long', 'invalid_extra_info');
   }
+  const scheduledAt =
+    input.scheduledAt !== undefined
+      ? parseScheduledAt(input.scheduledAt)
+      : existing.scheduledAt;
 
   const [row] = await db
     .update(drives)
@@ -438,6 +505,8 @@ export async function updateDrive(
       extraInfo: extraInfo ?? null,
       fromPlace: input.fromPlace?.trim() || null,
       toPlace: input.toPlace?.trim() || null,
+      scheduledAt,
+      reminderSentAt: reminderSentAtForSchedule(scheduledAt),
       updatedAt: new Date(),
     })
     .where(eq(drives.id, driveId))
@@ -449,9 +518,21 @@ export async function updateDrive(
 
 export async function listDrives(
   viewerId: string,
-  query: { status?: string; completed?: boolean; limit?: number; cursor?: string },
-): Promise<{ items: DriveListItemDto[]; nextCursor?: string }> {
+  query: {
+    status?: string;
+    completed?: boolean;
+    limit?: number;
+    cursor?: string;
+    offset?: number;
+  },
+): Promise<{
+  items: DriveListItemDto[];
+  nextCursor?: string;
+  nextOffset?: number;
+}> {
   const limit = Math.min(Math.max(query.limit ?? 50, 1), 100);
+  const offset = Math.max(query.offset ?? 0, 0);
+  const useOffset = query.offset != null;
   const conditions = [];
 
   if (query.completed) {
@@ -511,7 +592,7 @@ export async function listDrives(
     conditions.push(eq(drives.status, 'open'));
   }
 
-  if (query.cursor) {
+  if (!useOffset && query.cursor) {
     const cursorDate = new Date(query.cursor);
     if (!Number.isNaN(cursorDate.getTime())) {
       conditions.push(sql`${drives.createdAt} < ${cursorDate}`);
@@ -523,9 +604,11 @@ export async function listDrives(
     .from(drives)
     .where(conditions.length ? and(...conditions) : undefined)
     .orderBy(desc(drives.createdAt))
-    .limit(limit + 1);
+    .limit(limit + 1)
+    .offset(useOffset ? offset : 0);
 
   const slice = rows.slice(0, limit);
+  const hasMore = rows.length > limit;
   const profileIds = new Set<string>();
   for (const row of slice) {
     profileIds.add(row.posterId);
@@ -641,9 +724,13 @@ export async function listDrives(
 
   return {
     items,
-    ...(rows.length > limit
-      ? { nextCursor: slice[slice.length - 1]?.createdAt.toISOString() }
-      : {}),
+    ...(useOffset
+      ? hasMore
+        ? { nextOffset: offset + limit }
+        : {}
+      : hasMore
+        ? { nextCursor: slice[slice.length - 1]?.createdAt.toISOString() }
+        : {}),
   };
 }
 
@@ -731,9 +818,11 @@ export async function applyToDrive(
         );
       }
 
-      // You can line up your next ride once the passenger is picked up, so
-      // only an accepted-but-not-started job (assigned) blocks applying.
-      const busy = await findActiveAssignment(tx, driverId, {
+      // Mid-ride apply is always ok. An accepted-but-not-started job only
+      // blocks applying to another *imminent* drive — scheduled ≥30 min out
+      // stays open so you can line up later work.
+      const busy = await findBlockingAssignment(tx, driverId, {
+        forScheduledAt: drive.scheduledAt,
         statuses: ['assigned'],
       });
       if (busy) {
@@ -968,8 +1057,9 @@ export async function acceptDirectInvite(
         throw new AppError(404, 'Offer not found', 'offer_not_found');
       }
 
-      const busy = await findActiveAssignment(tx, driverId, {
+      const busy = await findBlockingAssignment(tx, driverId, {
         excludeDriveId: driveId,
+        forScheduledAt: drive.scheduledAt,
       });
       if (busy) {
         throw new AppError(
@@ -1000,6 +1090,7 @@ export async function acceptDirectInvite(
         .set({
           status: 'assigned',
           assigneeId: driverId,
+          reminderSentAt: reminderSentAtForSchedule(drive.scheduledAt),
           updatedAt: new Date(),
         })
         .where(and(eq(drives.id, driveId), eq(drives.status, 'open')))
@@ -1118,8 +1209,9 @@ export async function acceptApplication(
         throw new AppError(404, 'Application not found', 'application_not_found');
       }
 
-      const busy = await findActiveAssignment(tx, app.driverId, {
+      const busy = await findBlockingAssignment(tx, app.driverId, {
         excludeDriveId: driveId,
+        forScheduledAt: drive.scheduledAt,
       });
       if (busy) {
         throw new AppError(
@@ -1174,6 +1266,7 @@ export async function acceptApplication(
           .set({
             status: 'assigned',
             assigneeId: app.driverId,
+            reminderSentAt: reminderSentAtForSchedule(drive.scheduledAt),
             updatedAt: new Date(),
           })
           .where(and(eq(drives.id, driveId), eq(drives.status, 'open')))
@@ -1238,6 +1331,8 @@ export async function markDrivePickedUp(
         .update(drives)
         .set({
           status: 'picked_up',
+          // Cancel is only allowed before pickup.
+          cancelRequestedAt: null,
           updatedAt: new Date(),
         })
         .where(and(eq(drives.id, driveId), eq(drives.status, 'assigned')))
@@ -1312,7 +1407,7 @@ export async function unassignDrive(
 }
 
 /**
- * Assignee requests cancel while on the job. Poster must approve or deny.
+ * Assignee requests cancel before pickup. Poster must approve or deny.
  */
 export async function requestDriveCancel(
   actorId: string,
@@ -1333,10 +1428,12 @@ export async function requestDriveCancel(
           'forbidden',
         );
       }
-      if (drive.status !== 'assigned' && drive.status !== 'picked_up') {
+      if (drive.status !== 'assigned') {
         throw new AppError(
           409,
-          'Drive is not active',
+          drive.status === 'picked_up'
+            ? 'Can’t cancel after pickup'
+            : 'Drive is not active',
           'invalid_status',
         );
       }
@@ -1352,10 +1449,7 @@ export async function requestDriveCancel(
           updatedAt: now,
         })
         .where(
-          and(
-            eq(drives.id, driveId),
-            inArray(drives.status, ['assigned', 'picked_up']),
-          ),
+          and(eq(drives.id, driveId), eq(drives.status, 'assigned')),
         )
         .returning();
       if (!updated) {
@@ -1412,8 +1506,14 @@ export async function respondDriveCancel(
           'no_cancel_request',
         );
       }
-      if (drive.status !== 'assigned' && drive.status !== 'picked_up') {
-        throw new AppError(409, 'Drive is not active', 'invalid_status');
+      if (drive.status !== 'assigned') {
+        throw new AppError(
+          409,
+          drive.status === 'picked_up'
+            ? 'Can’t cancel after pickup'
+            : 'Drive is not active',
+          'invalid_status',
+        );
       }
 
       if (!approve) {
@@ -1447,10 +1547,7 @@ export async function respondDriveCancel(
           updatedAt: new Date(),
         })
         .where(
-          and(
-            eq(drives.id, driveId),
-            inArray(drives.status, ['assigned', 'picked_up']),
-          ),
+          and(eq(drives.id, driveId), eq(drives.status, 'assigned')),
         )
         .returning();
       if (!updated) {
@@ -1473,7 +1570,7 @@ export async function respondDriveCancel(
 
 /**
  * Poster takes down a job they posted — removes it from the board.
- * Allowed while open / assigned / picked up (not after complete).
+ * Allowed while open / assigned (not after pickup or complete).
  */
 export async function cancelDriveByPoster(
   posterId: string,
@@ -1490,14 +1587,12 @@ export async function cancelDriveByPoster(
       if (drive.posterId !== posterId) {
         throw new AppError(403, 'Only the poster can take this down', 'forbidden');
       }
-      if (
-        drive.status !== 'open' &&
-        drive.status !== 'assigned' &&
-        drive.status !== 'picked_up'
-      ) {
+      if (drive.status !== 'open' && drive.status !== 'assigned') {
         throw new AppError(
           409,
-          'This drive can’t be taken down',
+          drive.status === 'picked_up'
+            ? 'Can’t take down after pickup'
+            : 'This drive can’t be taken down',
           'invalid_status',
         );
       }
@@ -1512,7 +1607,7 @@ export async function cancelDriveByPoster(
         .where(
           and(
             eq(drives.id, driveId),
-            inArray(drives.status, ['open', 'assigned', 'picked_up']),
+            inArray(drives.status, ['open', 'assigned']),
           ),
         )
         .returning();

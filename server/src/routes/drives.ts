@@ -4,8 +4,9 @@ import { and, eq } from 'drizzle-orm';
 
 import { db } from '../db/client.js';
 import { idempotencyKeys } from '../db/schema.js';
-import { AppError, sendError } from '../lib/errors.js';
 import { trackEvent } from '../lib/analytics.js';
+import { writeAudit } from '../lib/audit.js';
+import { AppError, sendError } from '../lib/errors.js';
 import { logDomain, logDomainWarn, shortId } from '../lib/log.js';
 import { assertClientLimits, requireJsonContentType } from '../lib/security.js';
 import { requireAuth, requireUser } from '../middleware/auth.js';
@@ -39,7 +40,7 @@ import {
   removeFavorite,
 } from '../services/profiles.js';
 
-async function withIdempotency(
+export async function withIdempotency(
   userId: string,
   request: { headers: Record<string, unknown>; method: string; url: string },
   reply: {
@@ -131,6 +132,7 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
         fromPlace: z.string().max(200).optional(),
         toPlace: z.string().max(200).optional(),
         inviteDriverId: z.string().uuid().optional(),
+        scheduledAt: z.string().min(10).max(40).optional(),
       })
       .safeParse(request.body);
     if (!body.success) return sendError(reply, 400, 'Invalid body', 'invalid_body');
@@ -186,6 +188,7 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
           .transform((v) => v === '1' || v === 'true'),
         limit: z.coerce.number().int().optional(),
         cursor: z.string().optional(),
+        offset: z.coerce.number().int().min(0).optional(),
       })
       .safeParse(request.query);
     if (!query.success) {
@@ -237,6 +240,7 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
         extraInfo: z.string().max(2000).optional(),
         fromPlace: z.string().max(200).optional(),
         toPlace: z.string().max(200).optional(),
+        scheduledAt: z.string().min(10).max(40).optional(),
       })
       .safeParse(request.body);
     if (!params.success || !body.success) {
@@ -290,11 +294,39 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
         windowSec: 3600,
         failClosed: true,
       });
-      const appRow = await applyToDrive(user.id, params.data.id, body.data);
+      const result = await withIdempotency(
+        user.id,
+        request as never,
+        reply as never,
+        async () => {
+          const appRow = await applyToDrive(user.id, params.data.id, body.data);
+          return {
+            status: 201,
+            body: {
+              application: {
+                id: appRow!.id,
+                driveId: appRow!.driveId,
+                status: appRow!.status,
+                createdAt: appRow!.createdAt.toISOString(),
+              },
+            },
+          };
+        },
+      );
       logDomain(request.log, 'drives.apply.ok', {
         requestId: request.id,
         userId: shortId(user.id),
         driveId: shortId(params.data.id),
+      });
+      writeAudit({
+        actorType: 'user',
+        actorId: user.id,
+        action: 'drive.apply',
+        entityType: 'drive',
+        entityId: params.data.id,
+        requestId: request.id,
+        ip: request.ip,
+        meta: { applicationId: (result.body as { application?: { id?: string } }).application?.id },
       });
       trackEvent({
         name: 'drive.apply',
@@ -303,14 +335,7 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
         ip: request.ip,
         props: { driveId: params.data.id },
       });
-      return reply.status(201).send({
-        application: {
-          id: appRow!.id,
-          driveId: appRow!.driveId,
-          status: appRow!.status,
-          createdAt: appRow!.createdAt.toISOString(),
-        },
-      });
+      return reply.status(result.status).send(result.body);
     } catch (err) {
       if (err instanceof AppError) {
         return sendError(reply, err.statusCode, err.message, err.code);
@@ -397,6 +422,22 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
         userId: shortId(user.id),
         driveId: shortId(params.data.id),
       });
+      const accepted = (result.body as { drive?: { status?: string; assigneeId?: string } }).drive;
+      writeAudit({
+        actorType: 'user',
+        actorId: user.id,
+        action: 'drive.accept',
+        entityType: 'drive',
+        entityId: params.data.id,
+        requestId: request.id,
+        ip: request.ip,
+        before: { status: 'open' },
+        after: {
+          status: accepted?.status,
+          assigneeId: accepted?.assigneeId,
+          applicationId: body.data.applicationId,
+        },
+      });
       trackEvent({
         name: 'drive.accept',
         userId: user.id,
@@ -476,8 +517,24 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
     if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
     try {
       const user = requireUser(request);
-      const drive = await unassignDrive(user.id, params.data.id);
-      return reply.send({ drive });
+      const result = await withIdempotency(user.id, request, reply, async () => {
+        const drive = await unassignDrive(user.id, params.data.id);
+        return { status: 200, body: { drive } };
+      });
+      writeAudit({
+        actorType: 'user',
+        actorId: user.id,
+        action: 'drive.unassign',
+        entityType: 'drive',
+        entityId: params.data.id,
+        requestId: request.id,
+        ip: request.ip,
+        before: { status: 'assigned' },
+        after: {
+          status: (result.body as { drive?: { status?: string } }).drive?.status,
+        },
+      });
+      return reply.status(result.status).send(result.body);
     } catch (err) {
       if (err instanceof AppError) {
         return sendError(reply, err.statusCode, err.message, err.code);
@@ -486,7 +543,7 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
     }
   });
 
-  /** Poster takes down a job they posted (open / assigned / picked up → cancelled). */
+  /** Poster takes down a job they posted (open / assigned → cancelled). */
   app.post('/:id/cancel', async (request, reply) => {
     const params = z.object({ id: z.string().uuid() }).safeParse(request.params);
     if (!params.success) return sendError(reply, 400, 'Invalid id', 'invalid_id');
@@ -558,6 +615,16 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
         requestId: request.id,
         userId: shortId(user.id),
         driveId: shortId(params.data.id),
+      });
+      writeAudit({
+        actorType: 'user',
+        actorId: user.id,
+        action: 'drive.cancel_request',
+        entityType: 'drive',
+        entityId: params.data.id,
+        requestId: request.id,
+        ip: request.ip,
+        meta: { kind: 'request' },
       });
       trackEvent({
         name: 'drive.cancel_request',
@@ -665,6 +732,17 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
         userId: shortId(user.id),
         driveId: shortId(params.data.id),
       });
+      writeAudit({
+        actorType: 'user',
+        actorId: user.id,
+        action: 'drive.picked_up',
+        entityType: 'drive',
+        entityId: params.data.id,
+        requestId: request.id,
+        ip: request.ip,
+        before: { status: 'assigned' },
+        after: { status: 'picked_up' },
+      });
       return reply.status(result.status).send(result.body);
     } catch (err) {
       if (err instanceof AppError) {
@@ -714,6 +792,17 @@ export const driveRoutes: FastifyPluginAsync = async (app) => {
         userId: shortId(user.id),
         driveId: shortId(params.data.id),
         costCents: body.data.costCents,
+      });
+      writeAudit({
+        actorType: 'user',
+        actorId: user.id,
+        action: 'drive.complete',
+        entityType: 'drive',
+        entityId: params.data.id,
+        requestId: request.id,
+        ip: request.ip,
+        before: { status: 'picked_up' },
+        after: { status: 'completed', costCents: body.data.costCents },
       });
       trackEvent({
         name: 'drive.complete',
@@ -796,14 +885,49 @@ export const balanceRoutes: FastifyPluginAsync = async (app) => {
         failClosed: true,
       });
       const user = requireUser(request);
-      const balance = await markBalancePaid(
+      const result = await withIdempotency(
         user.id,
-        params.data.id,
-        body.data.settlementProofKey,
+        request as never,
+        reply as never,
+        async () => {
+          const balance = await markBalancePaid(
+            user.id,
+            params.data.id,
+            body.data.settlementProofKey,
+          );
+          if (!balance) {
+            throw new AppError(
+              409,
+              'Payment could not be marked',
+              'payment_conflict',
+            );
+          }
+          return {
+            status: 200,
+            body: {
+              balance: {
+                id: balance.id,
+                status: balance.status,
+                paidAt: balance.paidAt?.toISOString() ?? null,
+                settledAt: balance.settledAt?.toISOString() ?? null,
+              },
+            },
+          };
+        },
       );
-      if (!balance) {
-        return sendError(reply, 409, 'Payment could not be marked', 'payment_conflict');
-      }
+      writeAudit({
+        actorType: 'user',
+        actorId: user.id,
+        action: 'balance.mark_paid',
+        entityType: 'balance',
+        entityId: params.data.id,
+        requestId: request.id,
+        ip: request.ip,
+        after: {
+          status: (result.body as { balance?: { status?: string } }).balance?.status,
+        },
+        meta: { hasProof: Boolean(body.data.settlementProofKey) },
+      });
       trackEvent({
         name: 'balance.mark_paid',
         userId: user.id,
@@ -814,14 +938,7 @@ export const balanceRoutes: FastifyPluginAsync = async (app) => {
           hasProof: Boolean(body.data.settlementProofKey),
         },
       });
-      return reply.send({
-        balance: {
-          id: balance.id,
-          status: balance.status,
-          paidAt: balance.paidAt?.toISOString() ?? null,
-          settledAt: balance.settledAt?.toISOString() ?? null,
-        },
-      });
+      return reply.status(result.status).send(result.body);
     } catch (err) {
       if (err instanceof AppError) {
         return sendError(reply, err.statusCode, err.message, err.code);
@@ -842,7 +959,37 @@ export const balanceRoutes: FastifyPluginAsync = async (app) => {
         failClosed: true,
       });
       const user = requireUser(request);
-      const balance = await confirmBalanceReceived(user.id, params.data.id);
+      const result = await withIdempotency(
+        user.id,
+        request as never,
+        reply as never,
+        async () => {
+          const balance = await confirmBalanceReceived(user.id, params.data.id);
+          return {
+            status: 200,
+            body: {
+              balance: {
+                id: balance.id,
+                status: balance.status,
+                paidAt: balance.paidAt?.toISOString(),
+                settledAt: balance.settledAt?.toISOString(),
+              },
+            },
+          };
+        },
+      );
+      writeAudit({
+        actorType: 'user',
+        actorId: user.id,
+        action: 'balance.confirm_received',
+        entityType: 'balance',
+        entityId: params.data.id,
+        requestId: request.id,
+        ip: request.ip,
+        after: {
+          status: (result.body as { balance?: { status?: string } }).balance?.status,
+        },
+      });
       trackEvent({
         name: 'balance.confirm_received',
         userId: user.id,
@@ -850,14 +997,7 @@ export const balanceRoutes: FastifyPluginAsync = async (app) => {
         ip: request.ip,
         props: { balanceId: params.data.id },
       });
-      return reply.send({
-        balance: {
-          id: balance.id,
-          status: balance.status,
-          paidAt: balance.paidAt?.toISOString(),
-          settledAt: balance.settledAt?.toISOString(),
-        },
-      });
+      return reply.status(result.status).send(result.body);
     } catch (err) {
       if (err instanceof AppError) {
         return sendError(reply, err.statusCode, err.message, err.code);
@@ -871,6 +1011,15 @@ export const profileRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', requireAuth);
 
   app.get('/', async (request, reply) => {
+    const query = z
+      .object({
+        limit: z.coerce.number().int().min(1).max(50).optional(),
+        offset: z.coerce.number().int().min(0).optional(),
+      })
+      .safeParse(request.query);
+    if (!query.success) {
+      return sendError(reply, 400, 'Invalid query', 'invalid_query');
+    }
     try {
       const user = requireUser(request);
       await assertClientLimits(request, reply, {
@@ -879,8 +1028,11 @@ export const profileRoutes: FastifyPluginAsync = async (app) => {
         userLimit: 40,
         windowSec: 60,
       });
-      const items = await listDriverProfiles(user.id);
-      return reply.send({ items });
+      const result = await listDriverProfiles(user.id, {
+        ...(query.data.limit != null ? { limit: query.data.limit } : {}),
+        ...(query.data.offset != null ? { offset: query.data.offset } : {}),
+      });
+      return reply.send(result);
     } catch (err) {
       if (err instanceof AppError) {
         return sendError(reply, err.statusCode, err.message, err.code);

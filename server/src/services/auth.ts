@@ -19,6 +19,7 @@ import {
   normalizePhone,
   passwordMeetsRequirements,
 } from '../lib/phone.js';
+import { recordSecurityEvent } from '../lib/securityEvents.js';
 import { presignGet } from '../lib/s3.js';
 
 export type AuthUserDto = {
@@ -480,7 +481,10 @@ export async function login(input: {
   return issueTokens(user.id);
 }
 
-export async function refresh(refreshToken: string): Promise<TokenPair> {
+export async function refresh(
+  refreshToken: string,
+  opts?: { ip?: string; requestId?: string },
+): Promise<TokenPair> {
   const claims = await verifyRefreshToken(refreshToken);
   if (!claims) {
     throw new AppError(401, 'Invalid refresh token', 'invalid_refresh');
@@ -503,7 +507,7 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
     .returning();
 
   if (!row) {
-    // Reuse / race: revoke whole family
+    // Reuse / race: revoke whole family — classic stolen-token replay signal
     await db
       .update(refreshTokens)
       .set({ revokedAt: new Date() })
@@ -513,6 +517,15 @@ export async function refresh(refreshToken: string): Promise<TokenPair> {
           isNull(refreshTokens.revokedAt),
         ),
       );
+    recordSecurityEvent({
+      kind: 'refresh_token_reuse',
+      severity: 'critical',
+      alert: true,
+      userId: claims.userId,
+      ip: opts?.ip,
+      requestId: opts?.requestId,
+      detail: { familyId: claims.familyId, tokenId: claims.tokenId },
+    });
     throw new AppError(401, 'Invalid refresh token', 'invalid_refresh');
   }
 

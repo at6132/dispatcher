@@ -54,6 +54,12 @@ const envSchema = z.object({
   /** Optional PostHog project key — mirrors analytics events when set */
   POSTHOG_API_KEY: z.string().optional(),
   POSTHOG_HOST: z.string().url().optional(),
+  /**
+   * When set, requests with header `X-Load-Test: <secret>` skip IP-keyed
+   * rate limits (global + per-route IP buckets). Per-user limits still apply.
+   * Use only for short capacity tests — bots share one IP; real drivers do not.
+   */
+  LOAD_TEST_BYPASS_SECRET: z.string().min(32).optional(),
 });
 
 export type Env = z.infer<typeof envSchema> & {

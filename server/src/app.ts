@@ -16,7 +16,7 @@ import {
   summarizeBody,
 } from './lib/log.js';
 import { checkRedis } from './lib/redis.js';
-import { rejectScanPath } from './lib/security.js';
+import { isLoadTestRequest, rejectScanPath } from './lib/security.js';
 import {
   notifyTelegram,
   shouldTelegramAlert,
@@ -251,7 +251,7 @@ export async function buildApp() {
       max: 400,
       timeWindow: '1 minute',
       nameSpace: 'rl-global:',
-      allowList: (req) => isQuietPath(req.url),
+      allowList: (req) => isQuietPath(req.url) || isLoadTestRequest(req),
       addHeaders: {
         'x-ratelimit-limit': true,
         'x-ratelimit-remaining': true,

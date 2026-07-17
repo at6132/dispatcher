@@ -99,3 +99,75 @@ export async function rateLimit(input: {
     return null;
   }
 }
+
+/**
+ * Track distinct string members under a key in a rolling window (sorted set).
+ * Returns the distinct count after adding `member`. Fail-open on Redis errors.
+ */
+export async function trackDistinctInWindow(input: {
+  key: string;
+  member: string;
+  windowSec: number;
+}): Promise<number> {
+  try {
+    const r = getRedis();
+    const now = Date.now();
+    const windowMs = input.windowSec * 1000;
+    const redisKey = `dist:${input.key}`;
+    const pipeline = r.pipeline();
+    pipeline.zremrangebyscore(redisKey, 0, now - windowMs);
+    pipeline.zadd(redisKey, now, input.member);
+    pipeline.zcard(redisKey);
+    pipeline.pexpire(redisKey, windowMs);
+    const results = await pipeline.exec();
+    return Number(results?.[2]?.[1] ?? 0);
+  } catch (err) {
+    console.error(
+      '[redis] trackDistinctInWindow failed (open)',
+      (err as Error).message,
+    );
+    return 0;
+  }
+}
+
+/**
+ * SETNX-style once-per-window flag. Returns true if this caller won the flag
+ * (should fire the alert). Fail-open → false (skip alert rather than spam).
+ */
+export async function claimAlertOnce(input: {
+  key: string;
+  ttlSec: number;
+}): Promise<boolean> {
+  try {
+    const r = getRedis();
+    const result = await r.set(`alert_once:${input.key}`, '1', 'EX', input.ttlSec, 'NX');
+    return result === 'OK';
+  } catch (err) {
+    console.error('[redis] claimAlertOnce failed (open)', (err as Error).message);
+    return false;
+  }
+}
+
+/**
+ * Add `member` to a Redis SET with TTL refresh. Returns the set cardinality
+ * after the add. Fail-open → 0.
+ */
+export async function addToTtlSet(input: {
+  key: string;
+  member: string;
+  ttlSec: number;
+}): Promise<number> {
+  try {
+    const r = getRedis();
+    const redisKey = `set:${input.key}`;
+    const pipeline = r.pipeline();
+    pipeline.sadd(redisKey, input.member);
+    pipeline.expire(redisKey, input.ttlSec);
+    pipeline.scard(redisKey);
+    const results = await pipeline.exec();
+    return Number(results?.[2]?.[1] ?? 0);
+  } catch (err) {
+    console.error('[redis] addToTtlSet failed (open)', (err as Error).message);
+    return 0;
+  }
+}

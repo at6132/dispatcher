@@ -1,0 +1,348 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Dispatcher load monitor</title>
+    <style>
+      :root {
+        --canvas: #252b33;
+        --deep: #1b2026;
+        --lift: #323942;
+        --ink: #eef1f4;
+        --muted: #9199a4;
+        --faint: #6e7682;
+        --accent: #b0c2cc;
+        --ok: #7dba98;
+        --warn: #c9a86a;
+        --bad: #c97a7a;
+        --hair: rgba(238, 241, 244, 0.1);
+        --sans: 'DM Sans', 'Segoe UI', system-ui, sans-serif;
+        --display: 'Cormorant Garamond', Georgia, serif;
+      }
+      * {
+        box-sizing: border-box;
+      }
+      body {
+        margin: 0;
+        min-height: 100vh;
+        background: radial-gradient(
+            1200px 600px at 20% -10%,
+            rgba(176, 194, 204, 0.12),
+            transparent 55%
+          ),
+          radial-gradient(
+            900px 500px at 90% 10%,
+            rgba(125, 186, 152, 0.08),
+            transparent 50%
+          ),
+          var(--canvas);
+        color: var(--ink);
+        font-family: var(--sans);
+      }
+      header {
+        padding: 1.5rem 1.75rem 0.75rem;
+        display: flex;
+        flex-wrap: wrap;
+        gap: 1rem;
+        align-items: flex-end;
+        justify-content: space-between;
+      }
+      h1 {
+        margin: 0;
+        font-family: var(--display);
+        font-weight: 500;
+        font-size: 2rem;
+        letter-spacing: 0.01em;
+      }
+      h1 em {
+        font-style: italic;
+        color: var(--accent);
+        font-weight: 400;
+      }
+      .sub {
+        color: var(--muted);
+        font-size: 0.9rem;
+        margin-top: 0.35rem;
+      }
+      .links {
+        display: flex;
+        flex-wrap: wrap;
+        gap: 0.5rem;
+      }
+      a.btn {
+        text-decoration: none;
+        color: var(--ink);
+        border: 1px solid var(--hair);
+        background: rgba(50, 57, 66, 0.65);
+        padding: 0.55rem 0.85rem;
+        border-radius: 999px;
+        font-size: 0.8rem;
+        letter-spacing: 0.04em;
+        text-transform: uppercase;
+      }
+      a.btn:hover {
+        border-color: rgba(176, 194, 204, 0.45);
+      }
+      main {
+        padding: 0.75rem 1.75rem 2rem;
+        display: grid;
+        gap: 1rem;
+      }
+      .grid {
+        display: grid;
+        grid-template-columns: repeat(4, minmax(0, 1fr));
+        gap: 0.75rem;
+      }
+      @media (max-width: 960px) {
+        .grid {
+          grid-template-columns: repeat(2, minmax(0, 1fr));
+        }
+      }
+      .card {
+        background: rgba(27, 32, 38, 0.72);
+        border: 1px solid var(--hair);
+        border-radius: 14px;
+        padding: 1rem 1.1rem;
+        backdrop-filter: blur(10px);
+      }
+      .label {
+        color: var(--faint);
+        font-size: 0.7rem;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        margin-bottom: 0.35rem;
+      }
+      .value {
+        font-size: 1.55rem;
+        font-variant-numeric: tabular-nums;
+      }
+      .value.ok {
+        color: var(--ok);
+      }
+      .value.warn {
+        color: var(--warn);
+      }
+      .value.bad {
+        color: var(--bad);
+      }
+      .hint {
+        color: var(--muted);
+        font-size: 0.8rem;
+        margin-top: 0.35rem;
+      }
+      .split {
+        display: grid;
+        grid-template-columns: 1.4fr 1fr;
+        gap: 1rem;
+      }
+      @media (max-width: 1100px) {
+        .split {
+          grid-template-columns: 1fr;
+        }
+      }
+      iframe {
+        width: 100%;
+        height: min(72vh, 820px);
+        border: 1px solid var(--hair);
+        border-radius: 14px;
+        background: var(--deep);
+      }
+      ul.checks {
+        margin: 0;
+        padding-left: 1.1rem;
+        color: var(--muted);
+        line-height: 1.55;
+        font-size: 0.92rem;
+      }
+      ul.checks li strong {
+        color: var(--ink);
+        font-weight: 600;
+      }
+      .row {
+        display: flex;
+        gap: 0.5rem;
+        align-items: center;
+        margin-top: 0.75rem;
+      }
+      input {
+        flex: 1;
+        background: var(--lift);
+        border: 1px solid var(--hair);
+        color: var(--ink);
+        border-radius: 10px;
+        padding: 0.55rem 0.75rem;
+        font: inherit;
+      }
+      button {
+        border: 0;
+        border-radius: 10px;
+        background: var(--accent);
+        color: var(--deep);
+        font-weight: 600;
+        padding: 0.55rem 0.9rem;
+        cursor: pointer;
+      }
+      .pulse {
+        display: inline-block;
+        width: 0.55rem;
+        height: 0.55rem;
+        border-radius: 50%;
+        background: var(--faint);
+        margin-right: 0.4rem;
+      }
+      .pulse.live {
+        background: var(--ok);
+        box-shadow: 0 0 0 4px rgba(125, 186, 152, 0.2);
+      }
+      .pulse.down {
+        background: var(--bad);
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div>
+        <h1>Load <em>monitor</em></h1>
+        <div class="sub">
+          2000 drivers · 500 dispatchers · watch p95 &amp; errors live
+        </div>
+      </div>
+      <div class="links">
+        <a class="btn" href="http://127.0.0.1:5665" target="_blank"
+          >k6 dashboard</a
+        >
+        <a
+          class="btn"
+          href="https://railway.app/project/84204a59-abf2-450c-beba-565438b04f80"
+          target="_blank"
+          >Railway</a
+        >
+        <a
+          class="btn"
+          href="https://dispatcher-production-31d1.up.railway.app/readyz"
+          target="_blank"
+          >API readyz</a
+        >
+      </div>
+    </header>
+
+    <main>
+      <div class="grid">
+        <div class="card">
+          <div class="label">API health</div>
+          <div class="value" id="health">—</div>
+          <div class="hint">
+            <span class="pulse" id="healthPulse"></span>
+            <span id="healthDetail">polling…</span>
+          </div>
+        </div>
+        <div class="card">
+          <div class="label">Pass bar</div>
+          <div class="value">p95 &lt; 1.5s</div>
+          <div class="hint">errors &lt; 2% · checks &gt; 95%</div>
+        </div>
+        <div class="card">
+          <div class="label">Target mix</div>
+          <div class="value">2.5k VUs</div>
+          <div class="hint">2000 home + 500 posting</div>
+        </div>
+        <div class="card">
+          <div class="label">Clock</div>
+          <div class="value" id="clock">—</div>
+          <div class="hint">local time</div>
+        </div>
+      </div>
+
+      <div class="split">
+        <div class="card" style="padding: 0; overflow: hidden">
+          <iframe
+            title="k6 web dashboard"
+            src="http://127.0.0.1:5665"
+          ></iframe>
+        </div>
+        <div class="card">
+          <div class="label">What to watch</div>
+          <ul class="checks">
+            <li>
+              <strong>board_open / board_offers p95</strong> — board always hits
+              Postgres; this is the launch killer if it climbs.
+            </li>
+            <li>
+              <strong>http_req_failed</strong> — keep under 2%. 409/429 from
+              apply races are expected and treated as OK in checks.
+            </li>
+            <li>
+              <strong>drive_create / drive_apply</strong> — posting + stampede
+              under 500 dispatchers.
+            </li>
+            <li>
+              <strong>Railway CPU / memory / Postgres connections</strong> —
+              pool is 30 per API instance.
+            </li>
+            <li>
+              <strong>Telegram</strong> — slow_request / slow_route_p95 alerts
+              (threshold 1500ms).
+            </li>
+            <li>
+              <strong>/readyz</strong> — must stay 200. If Redis or DB flakes,
+              this goes 503.
+            </li>
+          </ul>
+          <div class="label" style="margin-top: 1.25rem">API base URL</div>
+          <div class="row">
+            <input
+              id="baseUrl"
+              value="https://dispatcher-production-31d1.up.railway.app"
+            />
+            <button type="button" id="pingBtn">Ping</button>
+          </div>
+        </div>
+      </div>
+    </main>
+
+    <script>
+      const healthEl = document.getElementById('health');
+      const healthDetail = document.getElementById('healthDetail');
+      const healthPulse = document.getElementById('healthPulse');
+      const clockEl = document.getElementById('clock');
+      const baseInput = document.getElementById('baseUrl');
+
+      function tickClock() {
+        clockEl.textContent = new Date().toLocaleTimeString();
+      }
+      tickClock();
+      setInterval(tickClock, 1000);
+
+      async function ping() {
+        const base = baseInput.value.replace(/\/$/, '');
+        const started = performance.now();
+        try {
+          const res = await fetch(`${base}/readyz`, { cache: 'no-store' });
+          const ms = Math.round(performance.now() - started);
+          const body = await res.json().catch(() => ({}));
+          if (res.ok) {
+            healthEl.textContent = `${ms} ms`;
+            healthEl.className = 'value ' + (ms > 800 ? 'warn' : 'ok');
+            healthPulse.className = 'pulse live';
+            healthDetail.textContent = `ready · db ${body.db ? 'ok' : '?'} · redis ${body.redis ? 'ok' : '?'}`;
+          } else {
+            healthEl.textContent = res.status;
+            healthEl.className = 'value bad';
+            healthPulse.className = 'pulse down';
+            healthDetail.textContent = JSON.stringify(body);
+          }
+        } catch (err) {
+          healthEl.textContent = 'down';
+          healthEl.className = 'value bad';
+          healthPulse.className = 'pulse down';
+          healthDetail.textContent = String(err.message || err);
+        }
+      }
+
+      document.getElementById('pingBtn').addEventListener('click', ping);
+      ping();
+      setInterval(ping, 5000);
+    </script>
+  </body>
+</html>

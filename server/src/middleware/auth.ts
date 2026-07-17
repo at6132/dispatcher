@@ -6,7 +6,9 @@ import { db } from '../db/client.js';
 import { users } from '../db/schema.js';
 import { verifyAccessToken } from '../lib/crypto.js';
 import { AppError } from '../lib/errors.js';
+import { addToTtlSet, claimAlertOnce } from '../lib/redis.js';
 import { assertRateLimit } from '../lib/security.js';
+import { recordSecurityEvent } from '../lib/securityEvents.js';
 
 export type AuthUser = {
   id: string;
@@ -20,6 +22,15 @@ declare module 'fastify' {
     user?: AuthUser;
   }
 }
+
+/**
+ * Distinct IPs per user in a rolling TTL window.
+ * Shared-NAT households / cellular carriers can legitimately rotate a couple
+ * of IPs — keep WARN_THRESHOLD above that noise floor.
+ */
+const USER_IP_WINDOW_SEC = 6 * 3600;
+const USER_IP_WARN_THRESHOLD = 4;
+const USER_IP_ALERT_THRESHOLD = 6;
 
 /** Locked drivers may only read their own account/balances until settled. */
 function isAllowedWhileLocked(request: FastifyRequest): boolean {
@@ -52,6 +63,64 @@ function isAllowedWhileLocked(request: FastifyRequest): boolean {
     return true;
   }
   return false;
+}
+
+/** Cheap Redis SET of recent IPs — no DB. Fire-and-forget aside from SADD/SCARD. */
+async function noteAuthenticatedIp(
+  userId: string,
+  ip: string | undefined,
+  requestId: string,
+): Promise<void> {
+  if (!ip) return;
+  const distinctIps = await addToTtlSet({
+    key: `user_ips:${userId}`,
+    member: ip,
+    ttlSec: USER_IP_WINDOW_SEC,
+  });
+  if (distinctIps < USER_IP_WARN_THRESHOLD) return;
+
+  if (distinctIps >= USER_IP_ALERT_THRESHOLD) {
+    const shouldAlert = await claimAlertOnce({
+      key: `account_multi_ip_alert:${userId}`,
+      ttlSec: USER_IP_WINDOW_SEC,
+    });
+    if (shouldAlert) {
+      recordSecurityEvent({
+        kind: 'account_multi_ip_suspected',
+        severity: 'critical',
+        alert: true,
+        userId,
+        ip,
+        requestId,
+        detail: {
+          distinctIps,
+          windowSec: USER_IP_WINDOW_SEC,
+          tier: 'alert',
+        },
+      });
+    }
+    return;
+  }
+
+  const shouldRecord = await claimAlertOnce({
+    key: `account_multi_ip_warn:${userId}`,
+    ttlSec: USER_IP_WINDOW_SEC,
+  });
+  if (shouldRecord) {
+    recordSecurityEvent({
+      kind: 'account_multi_ip_suspected',
+      severity: 'warn',
+      alert: false,
+      userId,
+      ip,
+      requestId,
+      detail: {
+        distinctIps,
+        windowSec: USER_IP_WINDOW_SEC,
+        tier: 'warn',
+      },
+    });
+  }
 }
 
 export async function requireAuth(
@@ -97,6 +166,10 @@ export async function requireAuth(
     },
     reply,
   );
+
+  // Session-hijack signal: access token used from many distinct IPs quickly.
+  // Fail-open inside Redis helpers — never block the request on this check.
+  void noteAuthenticatedIp(user.id, request.ip, request.id);
 
   if (user.status === 'locked' && !isAllowedWhileLocked(request)) {
     throw new AppError(

@@ -1,11 +1,13 @@
 import type { FastifyPluginAsync } from 'fastify';
 import { z } from 'zod';
 
-import { AppError, sendError } from '../lib/errors.js';
 import { trackEvent } from '../lib/analytics.js';
+import { writeAudit } from '../lib/audit.js';
+import { AppError, sendError } from '../lib/errors.js';
 import { assertClientLimits, requireJsonContentType } from '../lib/security.js';
 import { requireAuth, requireUser } from '../middleware/auth.js';
 import { markPlatformFeePaid } from '../services/platformFees.js';
+import { withIdempotency } from './drives.js';
 
 export const platformFeeRoutes: FastifyPluginAsync = async (app) => {
   app.addHook('preHandler', requireAuth);
@@ -33,11 +35,43 @@ export const platformFeeRoutes: FastifyPluginAsync = async (app) => {
         failClosed: true,
       });
       const user = requireUser(request);
-      const fee = await markPlatformFeePaid(
+      const result = await withIdempotency(
         user.id,
-        params.data.id,
-        body.data.settlementProofKey,
+        request as never,
+        reply as never,
+        async () => {
+          const fee = await markPlatformFeePaid(
+            user.id,
+            params.data.id,
+            body.data.settlementProofKey,
+          );
+          return {
+            status: 200,
+            body: {
+              platformFee: {
+                id: fee.id,
+                status: fee.status,
+                paidAt: fee.paidAt?.toISOString() ?? null,
+                settledAt: fee.settledAt?.toISOString() ?? null,
+              },
+            },
+          };
+        },
       );
+      writeAudit({
+        actorType: 'user',
+        actorId: user.id,
+        action: 'platform_fee.mark_paid',
+        entityType: 'platform_fee',
+        entityId: params.data.id,
+        requestId: request.id,
+        ip: request.ip,
+        after: {
+          status: (result.body as { platformFee?: { status?: string } }).platformFee
+            ?.status,
+        },
+        meta: { hasProof: Boolean(body.data.settlementProofKey) },
+      });
       trackEvent({
         name: 'platform_fee.mark_paid',
         userId: user.id,
@@ -48,14 +82,7 @@ export const platformFeeRoutes: FastifyPluginAsync = async (app) => {
           hasProof: Boolean(body.data.settlementProofKey),
         },
       });
-      return reply.send({
-        platformFee: {
-          id: fee.id,
-          status: fee.status,
-          paidAt: fee.paidAt?.toISOString() ?? null,
-          settledAt: fee.settledAt?.toISOString() ?? null,
-        },
-      });
+      return reply.status(result.status).send(result.body);
     } catch (err) {
       if (err instanceof AppError) {
         return sendError(reply, err.statusCode, err.message, err.code);

@@ -23,12 +23,21 @@ export type ProfileTripHistoryItemDto = {
 
 export async function listDriverProfiles(
   viewerId: string,
-): Promise<ProfileListItemDto[]> {
+  opts?: { limit?: number; offset?: number },
+): Promise<{ items: ProfileListItemDto[]; nextOffset?: number }> {
+  const limit = Math.min(Math.max(opts?.limit ?? 50, 1), 50);
+  const offset = Math.max(opts?.offset ?? 0, 0);
+
   const rows = await db
     .select({ id: users.id })
     .from(users)
     .where(and(eq(users.onboardingComplete, true), ne(users.id, viewerId)))
-    .orderBy(asc(users.name));
+    .orderBy(asc(users.name), asc(users.id))
+    .limit(limit + 1)
+    .offset(offset);
+
+  const hasMore = rows.length > limit;
+  const pageRows = rows.slice(0, limit);
 
   let favSet = new Set<string>();
   try {
@@ -42,7 +51,7 @@ export async function listDriverProfiles(
   }
 
   const items: ProfileListItemDto[] = [];
-  for (const row of rows) {
+  for (const row of pageRows) {
     try {
       const profile = await toPublicProfile(row.id);
       items.push({
@@ -59,7 +68,10 @@ export async function listDriverProfiles(
     return a.name.localeCompare(b.name);
   });
 
-  return items;
+  return {
+    items,
+    ...(hasMore ? { nextOffset: offset + limit } : {}),
+  };
 }
 
 export async function getDriverProfile(
