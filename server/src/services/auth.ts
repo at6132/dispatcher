@@ -21,6 +21,7 @@ import {
 } from '../lib/phone.js';
 import { recordSecurityEvent } from '../lib/securityEvents.js';
 import { presignGet } from '../lib/s3.js';
+import { assertSignupPin } from './appSettings.js';
 
 export type AuthUserDto = {
   id: string;
@@ -434,7 +435,10 @@ export async function signup(input: {
   name: string;
   phone: string;
   password: string;
+  pin: string;
 }): Promise<TokenPair> {
+  await assertSignupPin(input.pin);
+
   const name = input.name.trim();
   if (name.length < 2 || name.length > 80) {
     throw new AppError(400, 'Enter a valid name', 'invalid_name');

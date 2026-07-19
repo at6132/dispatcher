@@ -241,6 +241,7 @@ export async function buildApp() {
           }
         : true,
       credentials: false,
+      methods: ['GET', 'HEAD', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     });
 
     await app.register(rateLimit, {
