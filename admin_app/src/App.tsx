@@ -12,6 +12,7 @@ import { DrivesPage } from './pages/DrivesPage';
 import { LoginPage } from './pages/LoginPage';
 import { SecurityPage } from './pages/SecurityPage';
 import { SessionsPage } from './pages/SessionsPage';
+import { SettingsPage } from './pages/SettingsPage';
 import { UsersPage } from './pages/UsersPage';
 import type { ReactNode } from 'react';
 
@@ -55,6 +56,7 @@ export function App() {
               <Route path="security" element={<SecurityPage />} />
               <Route path="audit" element={<AuditPage />} />
               <Route path="sessions" element={<SessionsPage />} />
+              <Route path="settings" element={<SettingsPage />} />
             </Route>
             <Route path="*" element={<Navigate to="/" replace />} />
           </Routes>
