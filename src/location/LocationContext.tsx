@@ -7,7 +7,7 @@ import {
   useState,
   type ReactNode,
 } from 'react';
-import { AppState } from 'react-native';
+import { AppState, Platform } from 'react-native';
 
 import { useAuth } from '../auth/AuthContext';
 import { logger } from '../debug/logger';
@@ -72,9 +72,24 @@ export function LocationProvider({ children }: { children: ReactNode }) {
     const subscription = AppState.addEventListener('change', (nextState) => {
       if (nextState === 'active') void refreshAndSync();
     });
+
+    // Browsers don't keep background GPS — refresh when the tab is focused again.
+    const onVisible =
+      Platform.OS === 'web' && typeof document !== 'undefined'
+        ? () => {
+            if (document.visibilityState === 'visible') void refreshAndSync();
+          }
+        : null;
+    if (onVisible) {
+      document.addEventListener('visibilitychange', onVisible);
+    }
+
     return () => {
       cancelled = true;
       subscription.remove();
+      if (onVisible) {
+        document.removeEventListener('visibilitychange', onVisible);
+      }
     };
   }, [
     status,

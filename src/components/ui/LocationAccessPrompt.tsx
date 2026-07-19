@@ -24,11 +24,13 @@ export type LocationAccessState =
 const inExpoGo =
   Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
 
+/** Expo Go + browsers only expose While Using — no Always / background. */
+const foregroundOnlyEnvironment = inExpoGo || Platform.OS === 'web';
+
 /** True when we have the best access this environment can grant. */
 export function isLocationAccessReady(access: LocationAccessState): boolean {
   if (access === 'always') return true;
-  // Expo Go cannot expose Always / background location to third-party apps.
-  if (access === 'whenInUse' && inExpoGo) return true;
+  if (access === 'whenInUse' && foregroundOnlyEnvironment) return true;
   return false;
 }
 
@@ -78,10 +80,12 @@ export function LocationAccessPrompt({ onAccessChange }: Props) {
   );
 
   const refresh = useCallback(async () => {
-    const [fg, bg] = await Promise.all([
-      Location.getForegroundPermissionsAsync(),
-      Location.getBackgroundPermissionsAsync(),
-    ]);
+    const fg = await Location.getForegroundPermissionsAsync();
+    if (foregroundOnlyEnvironment) {
+      publish(locationAccessFromPermissions(fg, null));
+      return;
+    }
+    const bg = await Location.getBackgroundPermissionsAsync().catch(() => null);
     publish(locationAccessFromPermissions(fg, bg));
   }, [publish]);
 
@@ -112,8 +116,8 @@ export function LocationAccessPrompt({ onAccessChange }: Props) {
         return;
       }
 
-      if (inExpoGo) {
-        // Always isn’t available in Expo Go — While Using is the max.
+      if (foregroundOnlyEnvironment) {
+        // Always / background aren’t available in Expo Go or the browser.
         publish(locationAccessFromPermissions(foreground, null));
         setNote(null);
         return;
@@ -141,7 +145,9 @@ export function LocationAccessPrompt({ onAccessChange }: Props) {
       setNote('Couldn’t get full location access. Open Settings to allow it.');
     } catch {
       setNote(
-        'Couldn’t finish location setup. Restart the app or open Settings and confirm Location is set to Always.',
+        Platform.OS === 'web'
+          ? 'Couldn’t finish location setup. Check that location is allowed for this site in your browser.'
+          : 'Couldn’t finish location setup. Restart the app or open Settings and confirm Location is set to Always.',
       );
     } finally {
       setBusy(false);
@@ -152,12 +158,16 @@ export function LocationAccessPrompt({ onAccessChange }: Props) {
     return (
       <View style={styles.card}>
         <Text style={styles.title}>
-          {inExpoGo ? 'Allow location' : 'Allow location · Always'}
+          {foregroundOnlyEnvironment
+            ? 'Allow location'
+            : 'Allow location · Always'}
         </Text>
         <Text style={styles.body}>
-          {inExpoGo
-            ? 'Location is on. Always access needs a native build of Dispatcher — Expo Go only supports While Using.'
-            : 'Always access is allowed. You can continue.'}
+          {Platform.OS === 'web'
+            ? 'Location is on for this browser tab. You can continue.'
+            : inExpoGo
+              ? 'Location is on. Always access needs a native build of Dispatcher — Expo Go only supports While Using.'
+              : 'Always access is allowed. You can continue.'}
         </Text>
         <Pressable
           disabled
@@ -179,20 +189,26 @@ export function LocationAccessPrompt({ onAccessChange }: Props) {
   return (
     <View style={styles.card}>
       <Text style={styles.title}>
-        {inExpoGo ? 'Allow location' : 'Allow location · Always'}
+        {foregroundOnlyEnvironment
+          ? 'Allow location'
+          : 'Allow location · Always'}
       </Text>
       <Text style={styles.body}>
-        {inExpoGo
-          ? 'Dispatcher needs your location to match rides. In Expo Go, choose While Using — Apple’s Always option isn’t available here.'
-          : 'Dispatcher needs your location all the time so rides can find you — even when the app isn’t open. Tap below and choose Allow While Using, then Always when Apple asks.'}
+        {Platform.OS === 'web'
+          ? 'Dispatcher needs your location to match rides while this tab is open. Tap below and allow location when your browser asks.'
+          : inExpoGo
+            ? 'Dispatcher needs your location to match rides. In Expo Go, choose While Using — Apple’s Always option isn’t available here.'
+            : 'Dispatcher needs your location all the time so rides can find you — even when the app isn’t open. Tap below and choose Allow While Using, then Always when Apple asks.'}
       </Text>
       <Button onPress={() => void askForLocation()} loading={busy}>
-        {access === 'whenInUse' && !inExpoGo
+        {access === 'whenInUse' && !foregroundOnlyEnvironment
           ? 'Upgrade to Always'
           : 'Allow location'}
       </Button>
       {note ? <Text style={styles.note}>{note}</Text> : null}
-      {access === 'blocked' || (access === 'whenInUse' && !inExpoGo) ? (
+      {Platform.OS !== 'web' &&
+      (access === 'blocked' ||
+        (access === 'whenInUse' && !foregroundOnlyEnvironment)) ? (
         <Pressable
           onPress={() => void Linking.openSettings()}
           hitSlop={8}

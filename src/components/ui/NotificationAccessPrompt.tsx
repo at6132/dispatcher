@@ -17,7 +17,8 @@ export type NotificationAccessState =
   | 'unknown'
   | 'blocked'
   | 'denied'
-  | 'granted';
+  | 'granted'
+  | 'unsupported';
 
 export function isNotificationAccessReady(
   access: NotificationAccessState,
@@ -57,9 +58,12 @@ type Props = {
 /**
  * Notification access so drivers hear about accepts, balances, and locks.
  * Optional — can continue without allowing.
+ * Web: Expo push isn't available in the browser yet — explain and continue.
  */
 export function NotificationAccessPrompt({ onAccessChange }: Props) {
-  const [access, setAccess] = useState<NotificationAccessState>('unknown');
+  const [access, setAccess] = useState<NotificationAccessState>(
+    Platform.OS === 'web' ? 'unsupported' : 'unknown',
+  );
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState<string | null>(null);
 
@@ -74,6 +78,10 @@ export function NotificationAccessPrompt({ onAccessChange }: Props) {
   );
 
   const refresh = useCallback(async () => {
+    if (Platform.OS === 'web') {
+      publish('unsupported');
+      return;
+    }
     const settings = await Notifications.getPermissionsAsync();
     publish(notificationAccessFromPermissions(settings));
   }, [publish]);
@@ -84,6 +92,7 @@ export function NotificationAccessPrompt({ onAccessChange }: Props) {
 
   // Re-check when returning from Settings.
   useEffect(() => {
+    if (Platform.OS === 'web') return;
     const sub = AppState.addEventListener('change', (state) => {
       if (state === 'active') void refresh();
     });
@@ -91,6 +100,7 @@ export function NotificationAccessPrompt({ onAccessChange }: Props) {
   }, [refresh]);
 
   const askForNotifications = useCallback(async () => {
+    if (Platform.OS === 'web') return;
     setBusy(true);
     setNote(null);
     try {
@@ -127,6 +137,19 @@ export function NotificationAccessPrompt({ onAccessChange }: Props) {
       setBusy(false);
     }
   }, [publish]);
+
+  if (Platform.OS === 'web') {
+    return (
+      <View style={styles.card}>
+        <Text style={styles.title}>Notifications</Text>
+        <Text style={styles.body}>
+          Push alerts aren’t available in the browser yet. Keep this tab open
+          for live board updates, or use the phone app for job notifications.
+        </Text>
+        <Text style={styles.note}>You can continue without notifications.</Text>
+      </View>
+    );
+  }
 
   if (ready) {
     return (

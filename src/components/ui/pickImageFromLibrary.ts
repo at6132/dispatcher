@@ -4,6 +4,7 @@ import {
   type Action,
 } from 'expo-image-manipulator';
 import * as ImagePicker from 'expo-image-picker';
+import { Platform } from 'react-native';
 
 /** Longest edge — enough for PFP / vehicle thumbs, small enough for Catskills uploads. */
 const MAX_EDGE = 1280;
@@ -67,13 +68,16 @@ async function optimizePickedImage(
  */
 export function pickImageFromLibrary(): Promise<string | undefined> {
   return enqueue(async () => {
-    const permission = await ImagePicker.getMediaLibraryPermissionsAsync();
-    if (permission.status === 'denied' && !permission.canAskAgain) {
-      return undefined;
-    }
-    if (permission.status !== 'granted') {
-      const asked = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (!asked.granted) return undefined;
+    // Web uses a file input — no MediaLibrary permission dialog.
+    if (Platform.OS !== 'web') {
+      const permission = await ImagePicker.getMediaLibraryPermissionsAsync();
+      if (permission.status === 'denied' && !permission.canAskAgain) {
+        return undefined;
+      }
+      if (permission.status !== 'granted') {
+        const asked = await ImagePicker.requestMediaLibraryPermissionsAsync();
+        if (!asked.granted) return undefined;
+      }
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({

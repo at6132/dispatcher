@@ -37,6 +37,8 @@ type Props = {
  * 1) explain why
  * 2) trigger the system dialog (includes “Allow Access to All Photos”)
  * 3) if limited, offer a path to expand access
+ *
+ * Web uses PhotoAccessPrompt.web.tsx (browser file picker, no MediaLibrary).
  */
 export function PhotoAccessPrompt({ onAccessChange }: Props) {
   const [permission, requestPermission] = MediaLibrary.usePermissions({

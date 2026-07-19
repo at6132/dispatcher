@@ -20,6 +20,12 @@ async function ensureAndroidChannel() {
  */
 export async function syncPushRegistration(): Promise<void> {
   try {
+    // Expo push tokens are native-only in SDK 54.
+    if (Platform.OS === 'web') {
+      logger.info('push', 'skipped_web');
+      return;
+    }
+
     await ensureAndroidChannel();
 
     const current = await Notifications.getPermissionsAsync();
