@@ -8,9 +8,25 @@ Dispatcher is a **simple shared drive board** for ~500–600 drivers (WhatsApp r
 
 Do not turn this into Uber, Stripe pay-in, or a map-heavy product.
 
+# Infrastructure
+
+**Railway** hosts the stack. Always-on rule: `.cursor/rules/infrastructure.mdc`
+
+| Piece | Role |
+| --- | --- |
+| Backend API | `server/` |
+| Web app | Expo web |
+| iOS app | Expo / EAS (talks to Railway API) |
+| Admin web app | `admin_app/` |
+| Postgres | Primary DB |
+| Redis | Cache / queues |
+| S3 bucket | Object storage |
+
 # Expo
 
 Read the exact versioned docs at https://docs.expo.dev/versions/v54.0.0/ before writing any code.
+
+**“Push to internal”** → EAS Update on channel `internal` (personal ad hoc phone), not TestFlight. Rule: `.cursor/rules/eas-internal-ota.mdc` · command: `npm run update:internal -- --message "…"`.
 
 # Design profile
 

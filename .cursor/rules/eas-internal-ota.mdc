@@ -1,0 +1,30 @@
+---
+description: “Push to internal” = EAS Update on channel internal (personal ad hoc phone), never TestFlight
+alwaysApply: true
+---
+
+# Internal OTA (personal phone)
+
+When the user says **push to internal**, **push internal**, **OTA internal**, or similar — publish an **EAS Update** to the personal ad hoc build. Do **not** run a TestFlight / production / store build unless they explicitly ask.
+
+## What “internal” is
+
+| Track | Profile | Channel | Who |
+| --- | --- | --- | --- |
+| Personal testing | `internal` (ad hoc install page) | `internal` | Avi’s registered iPhone |
+| Public beta | `production` (store) | `production` | TestFlight |
+
+- Project: `@avitaub/dispatcher`
+- Runtime: `appVersion` policy (`1.0.0` until native version bumps)
+- Registered device already on the ad hoc profile — OTA reaches that phone after install of an `internal` binary
+- JS/UI-only changes → **update only**. Native module / app.json native changes → `npm run build:internal` (new binary), then updates again
+
+## Command (do this)
+
+```bash
+npm run update:internal -- --message "<short what changed>"
+```
+
+That runs `eas update --channel internal --environment preview` and texts the update link to Telegram.
+
+Confirm success in the reply (group ID / URL if printed). Do not submit to App Store Connect. Do not use channel `production` or `preview` for this phrase.

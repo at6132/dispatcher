@@ -1,0 +1,22 @@
+---
+description: Railway deployment stack — web, iOS, backend, admin, Redis, Postgres, S3
+alwaysApply: true
+---
+
+# Infrastructure
+
+Deployments and managed services live on **Railway**.
+
+## Services
+
+| Piece | Notes |
+| --- | --- |
+| Backend API | Fastify in `server/` |
+| Web app | Expo web build |
+| iOS app | Expo / EAS native (API + assets talk to Railway) |
+| Admin web app | `admin_app/` |
+| Postgres | Primary DB (`DATABASE_URL`) |
+| Redis | Cache / queues (`REDIS_URL`) |
+| S3 bucket | Object storage (uploads / media) |
+
+Prefer Railway for deploy, env vars, logs, and ops questions. Do not assume a separate cloud for these pieces unless the user says otherwise.
