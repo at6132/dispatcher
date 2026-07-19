@@ -509,14 +509,13 @@ export function ProfileScreen() {
                     adjustsFontSizeToFit
                     minimumFontScale={0.8}
                   >
-                    Your <Text style={styles.trail}>settings</Text>
-                  </Text>
-                  <Text style={styles.support}>
-                    Notifications, sign out, and account.
+                    Notification <Text style={styles.trail}>settings</Text>
                   </Text>
 
                   <View style={styles.settingsSection}>
-                    <Text style={styles.settingsSectionTitle}>When you post</Text>
+                    <Text style={styles.settingsSectionTitle}>
+                      Posting notifications
+                    </Text>
                     {notifLoading ? (
                       <LoadingHint label="Loading…" variant="inline" />
                     ) : (
@@ -556,7 +555,9 @@ export function ProfileScreen() {
                   <View style={styles.settingsDivider} />
 
                   <View style={styles.settingsSection}>
-                    <Text style={styles.settingsSectionTitle}>When you drive</Text>
+                    <Text style={styles.settingsSectionTitle}>
+                      Driving notifications
+                    </Text>
                     {notifLoading ? null : (
                       <View style={styles.notifStack}>
                         <ChoiceGroup
@@ -639,7 +640,7 @@ export function ProfileScreen() {
               </View>
               {editing ? (
                 <Text style={styles.support}>
-                  Update what other drivers see. Drive count stays automatic.
+                  Update what other drivers see
                 </Text>
               ) : null}
 
