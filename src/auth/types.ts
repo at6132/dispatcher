@@ -59,6 +59,8 @@ export type SignUpInput = {
   name: string;
   phone: string;
   password: string;
+  /** Admin-configured group PIN required to create an account. */
+  pin: string;
 };
 
 export type OnboardingInput = OnboardingProfile;
@@ -66,7 +68,7 @@ export type OnboardingInput = OnboardingProfile;
 export type AuthStatus = 'bootstrapping' | 'authenticated' | 'unauthenticated';
 
 export type FieldErrors = Partial<
-  Record<'name' | 'phone' | 'password' | 'confirmPassword', string>
+  Record<'name' | 'phone' | 'password' | 'confirmPassword' | 'pin', string>
 >;
 
 export type AuthRoute = 'auth' | 'contactSupport';

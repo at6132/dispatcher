@@ -1,6 +1,11 @@
 import { ApiError } from './client';
 
-export type AuthField = 'name' | 'phone' | 'password' | 'confirmPassword';
+export type AuthField =
+  | 'name'
+  | 'phone'
+  | 'password'
+  | 'confirmPassword'
+  | 'pin';
 
 export type MappedError = {
   /** Clear, user-facing copy */
@@ -54,6 +59,18 @@ export function mapApiError(
           message:
             'Password needs 8+ characters with at least one letter and one number.',
           field: 'password',
+          code: err.code,
+        };
+      case 'invalid_signup_pin':
+        return {
+          message: 'Wrong signup PIN. Ask whoever invited you.',
+          field: 'pin',
+          code: err.code,
+        };
+      case 'signup_pin_unset':
+        return {
+          message: 'Signup isn’t open yet. Try again later.',
+          field: 'pin',
           code: err.code,
         };
       case 'invalid_body':

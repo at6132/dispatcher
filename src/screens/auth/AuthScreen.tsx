@@ -36,6 +36,7 @@ const EMPTY: AuthFormValues = {
   phone: '',
   password: '',
   confirmPassword: '',
+  pin: '',
 };
 
 type Touched = Partial<Record<keyof AuthFormValues, boolean>>;
@@ -65,6 +66,7 @@ export function AuthScreen({ onForgotPassword }: Props) {
   const phoneRef = useRef<TextInput>(null);
   const passwordRef = useRef<TextInput>(null);
   const confirmRef = useRef<TextInput>(null);
+  const pinRef = useRef<TextInput>(null);
   const fade = useRef(new Animated.Value(0)).current;
   const rise = useRef(new Animated.Value(14)).current;
 
@@ -157,6 +159,7 @@ export function AuthScreen({ onForgotPassword }: Props) {
           name: values.name.trim(),
           phone: normalizePhone(values.phone),
           password: values.password,
+          pin: values.pin.trim(),
         });
       }
     } catch (err) {
@@ -166,6 +169,7 @@ export function AuthScreen({ onForgotPassword }: Props) {
         setFormError(null);
         if (mapped.field === 'phone') phoneRef.current?.focus();
         else if (mapped.field === 'password') passwordRef.current?.focus();
+        else if (mapped.field === 'pin') pinRef.current?.focus();
       } else {
         setFormError(mapped.message);
       }
@@ -301,9 +305,9 @@ export function AuthScreen({ onForgotPassword }: Props) {
                     secureTextEntry={!showConfirm}
                     autoComplete="new-password"
                     textContentType="newPassword"
-                    returnKeyType="go"
+                    returnKeyType="next"
                     submitBehavior="submit"
-                    onSubmitEditing={() => void onSubmit()}
+                    onSubmitEditing={() => pinRef.current?.focus()}
                     editable={!submitting}
                     trailing={
                       <PasswordVisibilityToggle
@@ -317,6 +321,27 @@ export function AuthScreen({ onForgotPassword }: Props) {
                     confirm={values.confirmPassword}
                   />
                 </View>
+              ) : null}
+
+              {mode === 'signUp' ? (
+                <TextField
+                  ref={pinRef}
+                  label="Signup PIN"
+                  value={values.pin}
+                  onChangeText={(t) =>
+                    setField('pin', t.replace(/\D/g, '').slice(0, 8))
+                  }
+                  onBlur={() => touch('pin')}
+                  error={show('pin')}
+                  keyboardType="number-pad"
+                  autoComplete="off"
+                  textContentType="oneTimeCode"
+                  returnKeyType="go"
+                  submitBehavior="submit"
+                  onSubmitEditing={() => void onSubmit()}
+                  editable={!submitting}
+                  maxLength={8}
+                />
               ) : null}
 
               {formError ? (

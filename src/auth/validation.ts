@@ -129,7 +129,15 @@ export type AuthFormValues = {
   phone: string;
   password: string;
   confirmPassword: string;
+  pin: string;
 };
+
+export function validateSignupPin(value: string): string | undefined {
+  const pin = value.trim();
+  if (!pin) return 'Enter the signup PIN';
+  if (!/^\d{4,8}$/.test(pin)) return 'PIN must be 4–8 digits';
+  return undefined;
+}
 
 export function validateAuthForm(
   mode: AuthMode,
@@ -157,6 +165,9 @@ export function validateAuthForm(
     values.confirmPassword,
   );
   if (confirmError) errors.confirmPassword = confirmError;
+
+  const pinError = validateSignupPin(values.pin);
+  if (pinError) errors.pin = pinError;
 
   return errors;
 }

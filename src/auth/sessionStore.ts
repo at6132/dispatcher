@@ -64,6 +64,7 @@ export async function createAccount(input: {
   phone: string;
   name: string;
   password: string;
+  pin: string;
 }): Promise<AuthUser> {
   logger.info('session', 'signup.start', {
     phoneTail: input.phone.slice(-4),
