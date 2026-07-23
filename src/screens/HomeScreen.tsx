@@ -8,7 +8,6 @@ import {
 } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Animated,
   FlatList,
   Platform,
@@ -38,6 +37,7 @@ import {
 import { createIdempotencyKey } from '../api/client';
 import { isApiError, mapApiError } from '../api/errors';
 import { useAuth } from '../auth/AuthContext';
+import { alertMessage, confirmAction } from '../ui/confirm';
 import { logger } from '../debug/logger';
 import { bottomNavClearance } from '../components/navigation/BottomNav';
 import { Button } from '../components/ui/Button';
@@ -444,7 +444,7 @@ export function HomeScreen({
         setAppliedIds((prev) => new Set(prev).add(driveId));
       } else {
         setApplyError({ driveId, message: mapped.message });
-        Alert.alert('Can’t apply', mapped.message);
+        alertMessage('Can’t apply', mapped.message);
       }
     } finally {
       setApplyingId(null);
@@ -476,47 +476,40 @@ export function HomeScreen({
   }, []);
 
   const onRequestCancel = useCallback((driveId: string) => {
-    Alert.alert(
-      'Cancel this ride?',
-      'The dispatcher will get a notification and must approve before the ride is cancelled.',
-      [
-        { text: 'Keep ride', style: 'cancel' },
-        {
-          text: 'Request cancel',
-          style: 'destructive',
-          onPress: () => {
-            void (async () => {
-              const action = `cancel-request:${driveId}`;
-              const idempotencyKey = keyForAction(
-                mutationKeysRef.current,
-                action,
-              );
-              setCancelError(null);
-              setCancellingId(driveId);
-              try {
-                const updated = await requestDriveCancel(driveId, {
-                  idempotencyKey,
-                });
-                mutationKeysRef.current.delete(action);
-                setBoards((prev) => ({
-                  ...prev,
-                  active: {
-                    ...prev.active,
-                    items: prev.active.items.map((d) =>
-                      d.id === driveId ? { ...d, ...updated } : d,
-                    ),
-                  },
-                }));
-              } catch (err) {
-                setCancelError(mapApiError(err).message);
-              } finally {
-                setCancellingId(null);
-              }
-            })();
+    void (async () => {
+      const ok = await confirmAction({
+        title: 'Cancel this ride?',
+        message:
+          'The dispatcher will get a notification and must approve before the ride is cancelled.',
+        confirmLabel: 'Request cancel',
+        cancelLabel: 'Keep ride',
+        destructive: true,
+      });
+      if (!ok) return;
+      const action = `cancel-request:${driveId}`;
+      const idempotencyKey = keyForAction(mutationKeysRef.current, action);
+      setCancelError(null);
+      setCancellingId(driveId);
+      try {
+        const updated = await requestDriveCancel(driveId, {
+          idempotencyKey,
+        });
+        mutationKeysRef.current.delete(action);
+        setBoards((prev) => ({
+          ...prev,
+          active: {
+            ...prev.active,
+            items: prev.active.items.map((d) =>
+              d.id === driveId ? { ...d, ...updated } : d,
+            ),
           },
-        },
-      ],
-    );
+        }));
+      } catch (err) {
+        setCancelError(mapApiError(err).message);
+      } finally {
+        setCancellingId(null);
+      }
+    })();
   }, []);
 
   const onComplete = useCallback((drive: DriveListItem) => {

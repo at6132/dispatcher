@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { createElement, useMemo, useState } from 'react';
 import {
   Modal,
   Platform,
@@ -46,6 +46,17 @@ function formatScheduled(d: Date): string {
   return `${date} · ${time}`;
 }
 
+function toDatetimeLocalValue(d: Date): string {
+  const pad = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+}
+
+function parseDatetimeLocalValue(raw: string): Date | null {
+  if (!raw) return null;
+  const next = new Date(raw);
+  return Number.isNaN(next.getTime()) ? null : next;
+}
+
 export function DateTimeField({
   label,
   value,
@@ -57,6 +68,7 @@ export function DateTimeField({
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState(value);
   const min = minimumDate ?? new Date();
+  const webMin = useMemo(() => toDatetimeLocalValue(min), [min]);
 
   const openPicker = () => {
     if (!editable) return;
@@ -79,27 +91,71 @@ export function DateTimeField({
     if (date) setDraft(date);
   };
 
+  const onWebChange = (raw: string) => {
+    const next = parseDatetimeLocalValue(raw);
+    if (!next) return;
+    commit(next);
+  };
+
   return (
     <View style={styles.wrap}>
-      <Pressable
-        accessibilityRole="button"
-        accessibilityLabel={label}
-        disabled={!editable}
-        onPress={openPicker}
-        style={[
-          styles.field,
-          open && styles.fieldFocused,
-          !!error && styles.fieldError,
-          !editable && styles.disabled,
-        ]}
-      >
-        <View style={styles.inner}>
-          <Text style={[styles.label, open && styles.labelFocused]}>
-            {label}
-          </Text>
-          <Text style={styles.value}>{formatScheduled(value)}</Text>
+      {Platform.OS === 'web' ? (
+        <View
+          style={[
+            styles.field,
+            !!error && styles.fieldError,
+            !editable && styles.disabled,
+          ]}
+        >
+          <View style={styles.inner}>
+            <Text style={styles.label}>{label}</Text>
+            {/* RN-web: DateTimePicker has no web UI — use native datetime-local. */}
+            {createElement('input', {
+              type: 'datetime-local',
+              'aria-label': label,
+              disabled: !editable,
+              min: webMin,
+              value: toDatetimeLocalValue(
+                value.getTime() < min.getTime() ? min : value,
+              ),
+              onChange: (e: { target: { value: string } }) =>
+                onWebChange(e.target.value),
+              style: {
+                width: '100%',
+                border: 'none',
+                outline: 'none',
+                background: 'transparent',
+                color: colors.ink,
+                fontFamily: fonts.sans,
+                fontSize: 16,
+                lineHeight: '22px',
+                padding: 0,
+                margin: 0,
+              },
+            })}
+          </View>
         </View>
-      </Pressable>
+      ) : (
+        <Pressable
+          accessibilityRole="button"
+          accessibilityLabel={label}
+          disabled={!editable}
+          onPress={openPicker}
+          style={[
+            styles.field,
+            open && styles.fieldFocused,
+            !!error && styles.fieldError,
+            !editable && styles.disabled,
+          ]}
+        >
+          <View style={styles.inner}>
+            <Text style={[styles.label, open && styles.labelFocused]}>
+              {label}
+            </Text>
+            <Text style={styles.value}>{formatScheduled(value)}</Text>
+          </View>
+        </Pressable>
+      )}
       {error ? (
         <Text
           style={styles.error}

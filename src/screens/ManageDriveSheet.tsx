@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ActivityIndicator,
-  Alert,
   Keyboard,
   KeyboardAvoidingView,
   Modal,
@@ -27,6 +26,7 @@ import {
 } from '../api/drives';
 import { createIdempotencyKey } from '../api/client';
 import { mapApiError } from '../api/errors';
+import { confirmAction } from '../ui/confirm';
 import {
   favoriteProfile,
   unfavoriteProfile,
@@ -441,37 +441,32 @@ export function ManageDriveSheet({
     const target = drive ?? active;
     if (!target) return;
     const hasDriver = target.status === 'assigned';
-    Alert.alert(
-      'Take down this post?',
-      hasDriver
-        ? 'The driver will be notified and the ride will be cancelled.'
-        : 'It leaves the board. Drivers can no longer apply.',
-      [
-        { text: 'Keep post', style: 'cancel' },
-        {
-          text: 'Take down',
-          style: 'destructive',
-          onPress: () => {
-            void (async () => {
-              const action = `cancel:${target.id}`;
-              const idempotencyKey = getMutationKey(action);
-              setActionError(null);
-              setTakingDown(true);
-              try {
-                await cancelDrive(target.id, { idempotencyKey });
-                mutationKeysRef.current.delete(action);
-                onChanged();
-                onClose();
-              } catch (err) {
-                setActionError(mapApiError(err).message);
-              } finally {
-                setTakingDown(false);
-              }
-            })();
-          },
-        },
-      ],
-    );
+    void (async () => {
+      const ok = await confirmAction({
+        title: 'Take down this post?',
+        message: hasDriver
+          ? 'The driver will be notified and the ride will be cancelled.'
+          : 'It leaves the board. Drivers can no longer apply.',
+        confirmLabel: 'Take down',
+        cancelLabel: 'Keep post',
+        destructive: true,
+      });
+      if (!ok) return;
+      const action = `cancel:${target.id}`;
+      const idempotencyKey = getMutationKey(action);
+      setActionError(null);
+      setTakingDown(true);
+      try {
+        await cancelDrive(target.id, { idempotencyKey });
+        mutationKeysRef.current.delete(action);
+        onChanged();
+        onClose();
+      } catch (err) {
+        setActionError(mapApiError(err).message);
+      } finally {
+        setTakingDown(false);
+      }
+    })();
   }, [drive, active, onChanged, onClose]);
 
   const onPhoneChange = useCallback((v: string) => {
@@ -591,6 +586,10 @@ export function ManageDriveSheet({
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
+              {/*
+                Keep tabs outside Keyboard.dismiss Pressable — nested Pressable
+                tabs don't receive taps reliably on react-native-web.
+              */}
               <Pressable onPress={Keyboard.dismiss} accessible={false}>
                 <View style={styles.hero}>
                   <Text style={styles.lead}>Manage </Text>
@@ -605,35 +604,32 @@ export function ManageDriveSheet({
                 >
                   {sheetDrive.routeText}
                 </Text>
+              </Pressable>
 
-                <View style={styles.tabs} accessibilityRole="tablist">
-                  {tabs.map((t) => {
-                    const selected = tab === t.key;
-                    return (
-                      <Pressable
-                        key={t.key}
-                        accessibilityRole="tab"
-                        accessibilityState={{ selected }}
-                        disabled={busy}
-                        onPress={() => setTab(t.key)}
+              <View style={styles.tabs} accessibilityRole="tablist">
+                {tabs.map((t) => {
+                  const selected = tab === t.key;
+                  return (
+                    <Pressable
+                      key={t.key}
+                      accessibilityRole="tab"
+                      accessibilityState={{ selected }}
+                      disabled={busy}
+                      onPress={() => setTab(t.key)}
+                      style={[styles.tab, selected && styles.tabOn]}
+                    >
+                      <Text
                         style={[
-                          styles.tab,
-                          selected && styles.tabOn,
+                          styles.tabLabel,
+                          selected && styles.tabLabelOn,
                         ]}
                       >
-                        <Text
-                          style={[
-                            styles.tabLabel,
-                            selected && styles.tabLabelOn,
-                          ]}
-                        >
-                          {t.label}
-                        </Text>
-                      </Pressable>
-                    );
-                  })}
-                </View>
-              </Pressable>
+                        {t.label}
+                      </Text>
+                    </Pressable>
+                  );
+                })}
+              </View>
 
               {tab === 'applicants' && isOpen ? (
                 <View style={styles.section}>

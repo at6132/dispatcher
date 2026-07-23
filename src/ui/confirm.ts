@@ -9,7 +9,7 @@ type ConfirmActionInput = {
 };
 
 /**
- * Native Alert.alert button callbacks do not run on react-native-web.
+ * Native Alert.alert is a no-op on react-native-web (button callbacks never run).
  * Use window.confirm on web; keep Alert on iOS/Android.
  */
 export function confirmAction(input: ConfirmActionInput): Promise<boolean> {
@@ -37,4 +37,16 @@ export function confirmAction(input: ConfirmActionInput): Promise<boolean> {
       },
     ]);
   });
+}
+
+/** Info-only alert that actually shows on web. */
+export function alertMessage(title: string, message?: string): void {
+  if (Platform.OS === 'web') {
+    const text = message ? `${title}\n\n${message}` : title;
+    if (typeof globalThis.alert === 'function') {
+      globalThis.alert(text);
+    }
+    return;
+  }
+  Alert.alert(title, message);
 }
