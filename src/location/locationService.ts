@@ -2,6 +2,7 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import * as Location from 'expo-location';
 import * as TaskManager from 'expo-task-manager';
+import { Platform } from 'react-native';
 
 import { savePresence } from '../auth/sessionStore';
 import { readPersistedUser } from '../auth/userStore';
@@ -256,7 +257,7 @@ export function subscribeToDriverLocation(
 }
 
 export async function ensureBackgroundLocationUpdates(): Promise<boolean> {
-  if (isRunningInExpoGo()) return false;
+  if (Platform.OS === 'web' || isRunningInExpoGo()) return false;
 
   const [foreground, background] = await Promise.all([
     Location.getForegroundPermissionsAsync(),
@@ -291,34 +292,34 @@ export async function ensureBackgroundLocationUpdates(): Promise<boolean> {
 }
 
 export async function stopBackgroundLocationUpdates(): Promise<void> {
-  if (
-    !isRunningInExpoGo() &&
-    (await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK))
-  ) {
+  if (Platform.OS === 'web' || isRunningInExpoGo()) return;
+  if (await Location.hasStartedLocationUpdatesAsync(BACKGROUND_LOCATION_TASK)) {
     await Location.stopLocationUpdatesAsync(BACKGROUND_LOCATION_TASK);
     logger.info('location', 'background_stopped');
   }
 }
 
-TaskManager.defineTask<{ locations: Location.LocationObject[] }>(
-  BACKGROUND_LOCATION_TASK,
-  async ({ data, error }) => {
-    if (error) {
-      logger.warn('location', 'background_error', { message: error.message });
-      return;
-    }
+if (Platform.OS !== 'web') {
+  TaskManager.defineTask<{ locations: Location.LocationObject[] }>(
+    BACKGROUND_LOCATION_TASK,
+    async ({ data, error }) => {
+      if (error) {
+        logger.warn('location', 'background_error', { message: error.message });
+        return;
+      }
 
-    const nativeLocation = data?.locations.at(-1);
-    if (!nativeLocation) return;
-    const location = await publishLocation(fromLocationObject(nativeLocation));
+      const nativeLocation = data?.locations.at(-1);
+      if (!nativeLocation) return;
+      const location = await publishLocation(fromLocationObject(nativeLocation));
 
-    // Keep exact location private when the driver is Offline.
-    try {
-      await syncIfDriverIsVisible(location);
-    } catch (err) {
-      logger.warn('location', 'background_sync_failed', {
-        err: err instanceof Error ? err.message : String(err),
-      });
-    }
-  },
-);
+      // Keep exact location private when the driver is Offline.
+      try {
+        await syncIfDriverIsVisible(location);
+      } catch (err) {
+        logger.warn('location', 'background_sync_failed', {
+          err: err instanceof Error ? err.message : String(err),
+        });
+      }
+    },
+  );
+}

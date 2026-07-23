@@ -13,6 +13,7 @@ const links = [
   ['/security', 'Security'],
   ['/audit', 'Audit'],
   ['/sessions', 'Sessions'],
+  ['/settings', 'Settings'],
 ] as const;
 
 export function Shell() {

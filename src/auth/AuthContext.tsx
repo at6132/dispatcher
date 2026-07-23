@@ -242,6 +242,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         phone: normalizePhone(input.phone),
         name: input.name.trim(),
         password: input.password,
+        pin: input.pin.trim(),
       });
       await clearPendingOnboarding();
       await applyUser(next, true);

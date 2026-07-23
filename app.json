@@ -28,6 +28,7 @@
         "backgroundImage": "./assets/images/android-icon-background.png",
         "monochromeImage": "./assets/images/android-icon-monochrome.png"
       },
+      "package": "com.avitaub.dispatcher",
       "permissions": [
         "ACCESS_COARSE_LOCATION",
         "ACCESS_FINE_LOCATION",
@@ -79,6 +80,12 @@
       "eas": {
         "projectId": "94f17225-3da2-4771-a86c-546b875093e2"
       }
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "updates": {
+      "url": "https://u.expo.dev/94f17225-3da2-4771-a86c-546b875093e2"
     }
   }
 }

@@ -79,7 +79,10 @@ const STEP_COPY: Record<
   4: {
     lead: 'Allow',
     trail: 'notifications',
-    body: 'Hear about job offers, ride updates, and balances when the app is closed.',
+    body:
+      Platform.OS === 'web'
+        ? 'Push alerts aren’t available in the browser yet. You can continue and use the phone app for job notifications.'
+        : 'Hear about job offers, ride updates, and balances when the app is closed.',
   },
   5: {
     lead: 'Zelle',
@@ -152,7 +155,10 @@ export function OnboardingScreen() {
   const zelleErrors = validateOnboardingZelle({ zelle });
 
   const copy = STEP_COPY[step];
-  const canPickPhotos = photoAccess === 'all' || photoAccess === 'limited';
+  const canPickPhotos =
+    Platform.OS === 'web' ||
+    photoAccess === 'all' ||
+    photoAccess === 'limited';
 
   const submitProfile = async (profile: OnboardingProfile) => {
     setSubmitting(true);

@@ -526,3 +526,12 @@ export const securityEvents = pgTable(
     index('security_events_request_idx').on(t.requestId),
   ],
 );
+
+/** Key/value product settings (e.g. signup PIN). */
+export const appSettings = pgTable('app_settings', {
+  key: text('key').primaryKey(),
+  value: text('value').notNull(),
+  updatedAt: timestamp('updated_at', { withTimezone: true })
+    .notNull()
+    .defaultNow(),
+});

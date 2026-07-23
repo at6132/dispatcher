@@ -2,7 +2,6 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import {
   KeyboardAvoidingView,
   Platform,
-  Alert,
   ScrollView,
   StyleSheet,
   Text,
@@ -27,6 +26,7 @@ import { LoadingHint } from '../components/ui/LoadingHint';
 import { TextField } from '../components/ui/TextField';
 import { useDriverLocation } from '../location/LocationContext';
 import { colors, fonts, space, tripRouteColor, type } from '../theme';
+import { alertMessage } from '../ui/confirm';
 
 type DriveDetailScreenProps = {
   driveId: string;
@@ -133,7 +133,7 @@ export function DriveDetailScreen({
         onChanged?.();
       } else {
         setActionError(mapped.message);
-        Alert.alert('Can’t apply', mapped.message);
+        alertMessage('Can’t apply', mapped.message);
       }
     } finally {
       setApplying(false);

@@ -41,10 +41,10 @@ export async function needsDevicePermissionsSetup(): Promise<boolean> {
   if (await readDevicePermissionsComplete()) return false;
 
   try {
-    const [fg, bg] = await Promise.all([
-      Location.getForegroundPermissionsAsync(),
-      Location.getBackgroundPermissionsAsync(),
-    ]);
+    const fg = await Location.getForegroundPermissionsAsync();
+    const bg =
+      // Browsers have no Always / background permission surface.
+      (await Location.getBackgroundPermissionsAsync().catch(() => null));
     const access = locationAccessFromPermissions(fg, bg);
     if (isLocationAccessReady(access)) {
       // Already set up on this install (e.g. finished full onboarding here).

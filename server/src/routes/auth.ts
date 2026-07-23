@@ -29,6 +29,7 @@ export const authRoutes: FastifyPluginAsync = async (app) => {
         name: z.string().min(1).max(80),
         phone: z.string().min(5).max(32),
         password: z.string().min(1).max(128),
+        pin: z.string().min(1).max(16),
       })
       .safeParse(request.body);
     if (!body.success) {

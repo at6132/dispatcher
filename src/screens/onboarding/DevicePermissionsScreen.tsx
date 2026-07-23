@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Pressable, StyleSheet, Text, View } from 'react-native';
+import { Platform, Pressable, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import { markDevicePermissionsComplete } from '../../auth/devicePermissionsStore';
@@ -32,7 +32,10 @@ const STEP_COPY: Record<
   1: {
     lead: 'Allow',
     trail: 'notifications',
-    body: 'Hear about job offers, ride updates, and balances when the app is closed.',
+    body:
+      Platform.OS === 'web'
+        ? 'Push alerts aren’t available in the browser yet. You can continue and use the phone app for job notifications.'
+        : 'Hear about job offers, ride updates, and balances when the app is closed.',
   },
 };
 

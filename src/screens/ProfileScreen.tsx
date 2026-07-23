@@ -1,6 +1,5 @@
 import { useCallback, useEffect, useMemo, useState } from 'react';
 import {
-  Alert,
   Image,
   Keyboard,
   KeyboardAvoidingView,
@@ -15,6 +14,7 @@ import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { ChevronLeft, Pencil, Settings } from 'lucide-react-native';
 
 import { mapApiError } from '../api/errors';
+import { confirmAction } from '../ui/confirm';
 import {
   getNotificationPrefs,
   normalizeNotificationPrefs,
@@ -221,64 +221,52 @@ export function ProfileScreen() {
   }, []);
 
   const onSignOut = useCallback(() => {
-    Alert.alert('Sign out?', 'You’ll need your phone and password to sign back in.', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign out',
-        style: 'destructive',
-        onPress: () => {
-          void (async () => {
-            setAccountBusy(true);
-            setNotifError(null);
-            try {
-              await signOut();
-            } catch (err) {
-              setNotifError(mapApiError(err).message);
-              setAccountBusy(false);
-            }
-          })();
-        },
-      },
-    ]);
+    void (async () => {
+      const ok = await confirmAction({
+        title: 'Sign out?',
+        message: 'You’ll need your phone and password to sign back in.',
+        confirmLabel: 'Sign out',
+        destructive: true,
+      });
+      if (!ok) return;
+      setAccountBusy(true);
+      setNotifError(null);
+      try {
+        await signOut();
+      } catch (err) {
+        setNotifError(mapApiError(err).message);
+        setAccountBusy(false);
+      }
+    })();
   }, [signOut]);
 
   const onDeleteAccount = useCallback(() => {
-    Alert.alert(
-      'Delete account?',
-      'This permanently removes your profile, posts, and applications. Open balances must be settled first. This can’t be undone.',
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Delete account',
-          style: 'destructive',
-          onPress: () => {
-            Alert.alert(
-              'Are you sure?',
-              'Your account and data will be deleted immediately.',
-              [
-                { text: 'Keep account', style: 'cancel' },
-                {
-                  text: 'Delete forever',
-                  style: 'destructive',
-                  onPress: () => {
-                    void (async () => {
-                      setAccountBusy(true);
-                      setNotifError(null);
-                      try {
-                        await deleteAccount();
-                      } catch (err) {
-                        setNotifError(mapApiError(err).message);
-                        setAccountBusy(false);
-                      }
-                    })();
-                  },
-                },
-              ],
-            );
-          },
-        },
-      ],
-    );
+    void (async () => {
+      const first = await confirmAction({
+        title: 'Delete account?',
+        message:
+          'This permanently removes your profile, posts, and applications. Open balances must be settled first. This can’t be undone.',
+        confirmLabel: 'Delete account',
+        destructive: true,
+      });
+      if (!first) return;
+      const second = await confirmAction({
+        title: 'Are you sure?',
+        message: 'Your account and data will be deleted immediately.',
+        confirmLabel: 'Delete forever',
+        cancelLabel: 'Keep account',
+        destructive: true,
+      });
+      if (!second) return;
+      setAccountBusy(true);
+      setNotifError(null);
+      try {
+        await deleteAccount();
+      } catch (err) {
+        setNotifError(mapApiError(err).message);
+        setAccountBusy(false);
+      }
+    })();
   }, [deleteAccount]);
 
   const patchNotifPref = useCallback(

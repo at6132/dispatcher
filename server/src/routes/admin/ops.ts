@@ -1,4 +1,8 @@
-import type { FastifyPluginAsync } from 'fastify';
+import type {
+  FastifyPluginAsync,
+  FastifyReply,
+  FastifyRequest,
+} from 'fastify';
 import {
   and,
   count,
@@ -39,12 +43,52 @@ import {
   requireAdminSession,
 } from '../../middleware/adminAuth.js';
 import { revokeAdminSession, revokeAllAdminSessions } from '../../services/adminAuth.js';
+import {
+  getSignupPin,
+  setSignupPin,
+} from '../../services/appSettings.js';
 import { notifyDriveStatusChange } from '../../services/pushNotifications.js';
 
 function parseLimit(raw: unknown, fallback = 50, max = 200): number {
   const n = Number(raw);
   if (!Number.isFinite(n) || n < 1) return fallback;
   return Math.min(Math.floor(n), max);
+}
+
+async function handleSaveSignupPin(
+  request: FastifyRequest,
+  reply: FastifyReply,
+) {
+  const body = z
+    .object({ pin: z.string().min(1).max(16) })
+    .safeParse(request.body);
+  if (!body.success) {
+    return sendError(reply, 400, 'Invalid body', 'invalid_body');
+  }
+
+  try {
+    const before = await getSignupPin();
+    const pin = await setSignupPin(body.data.pin);
+    const session = requireAdminSession(request);
+    writeAudit({
+      actorType: 'admin',
+      actorId: session.id,
+      sessionId: session.id,
+      action: 'admin.settings.signup_pin.set',
+      entityType: 'app_settings',
+      entityId: 'signup_pin',
+      requestId: request.id,
+      ip: request.ip,
+      before: { configured: before != null },
+      after: { configured: true },
+    });
+    return reply.send({ pin, configured: true });
+  } catch (err) {
+    if (err instanceof AppError) {
+      return sendError(reply, err.statusCode, err.message, err.code);
+    }
+    throw err;
+  }
 }
 
 export const adminOpsRoutes: FastifyPluginAsync = async (app) => {
@@ -1152,4 +1196,14 @@ export const adminOpsRoutes: FastifyPluginAsync = async (app) => {
     });
     return reply.send({ revoked: n });
   });
+
+  // ---- Settings (signup PIN, etc.) ----
+  app.get('/settings/signup-pin', async (_request, reply) => {
+    const pin = await getSignupPin();
+    return reply.send({ pin, configured: pin != null });
+  });
+
+  // PATCH preferred; PUT kept for older admin bundles still in browser cache.
+  app.patch('/settings/signup-pin', handleSaveSignupPin);
+  app.put('/settings/signup-pin', handleSaveSignupPin);
 };

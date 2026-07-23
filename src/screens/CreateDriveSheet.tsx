@@ -385,6 +385,10 @@ export function CreateDriveSheet({
               keyboardShouldPersistTaps="handled"
               showsVerticalScrollIndicator={false}
             >
+              {/*
+                Do not wrap ChoiceGroup / steppers in Pressable — on web the
+                parent press steals taps and options appear dead.
+              */}
               <Pressable onPress={Keyboard.dismiss} accessible={false}>
                 <View style={styles.hero}>
                   <Text style={styles.lead}>
@@ -399,115 +403,115 @@ export function CreateDriveSheet({
                     ? `To ${directTo.name}. They get a popup with full details — accept or decline.`
                     : 'Post to the open board for drivers nearby.'}
                 </Text>
+              </Pressable>
 
-                {directTo ? (
-                  <View style={styles.directPreview}>
-                    <DriverCard
-                      name={(liveTarget ?? directTo).name}
-                      vehicleType={(liveTarget ?? directTo).vehicleType}
-                      detail={[
-                        (liveTarget ?? directTo).availability
-                          ? (liveTarget ?? directTo).availability ===
-                            'available'
-                            ? 'Available'
-                            : (liveTarget ?? directTo).availability === 'busy'
-                              ? 'Busy'
-                              : 'Offline'
-                          : null,
-                        (liveTarget ?? directTo).detail,
-                      ]
-                        .filter(Boolean)
-                        .join(' · ')}
-                      notes={(liveTarget ?? directTo).notes}
-                      photoUri={(liveTarget ?? directTo).photoUri}
-                      vehicleInteriorUri={
-                        (liveTarget ?? directTo).vehicleInteriorUri
-                      }
-                      vehicleExteriorUri={
-                        (liveTarget ?? directTo).vehicleExteriorUri
-                      }
-                      coordinate={
-                        mapReady
-                          ? mapCoordinate(liveTarget ?? directTo)
-                          : null
-                      }
-                      showMap={isOnline(
-                        (liveTarget ?? directTo).availability,
-                      )}
-                      availability={
-                        (liveTarget ?? directTo).availability ?? 'offline'
-                      }
-                    />
-                  </View>
-                ) : null}
-
-                <View style={styles.fields}>
-                  <TextField
-                    label="Title"
-                    value={title}
-                    onChangeText={setTitle}
-                    placeholder="SF to Monticello"
-                    autoCapitalize="words"
-                    error={titleError}
-                    editable={!submitting}
-                    returnKeyType="next"
-                  />
-                  <TextField
-                    label="Customer phone"
-                    value={formatPhoneDisplay(phone)}
-                    onChangeText={(v) => setPhone(formatPhoneDisplay(v))}
-                    keyboardType="phone-pad"
-                    error={phoneError}
-                    editable={!submitting}
-                    textContentType="telephoneNumber"
-                  />
-                  <ChoiceGroup
-                    label="Vehicle class"
-                    options={VEHICLE_CLASS_OPTIONS}
-                    value={vehicleClass}
-                    onChange={setVehicleClass}
-                    error={classError}
-                  />
-                  <NumberStepper
-                    label="Seats"
-                    hint="Passenger seats needed"
-                    value={seats}
-                    min={1}
-                    max={20}
-                    onChange={setSeats}
-                  />
-                  <ChoiceGroup
-                    label="Trip"
-                    options={TRIP_OPTIONS}
-                    value={tripType}
-                    onChange={setTripType}
-                    error={tripError}
-                  />
-                  <DateTimeField
-                    label="When"
-                    value={scheduledAt}
-                    onChange={setScheduledAt}
-                    editable={!submitting}
-                  />
-                  <TextField
-                    label="Address (optional)"
-                    value={address}
-                    onChangeText={setAddress}
-                    placeholder="Pickup or drop-off"
-                    autoCapitalize="words"
-                    editable={!submitting}
-                  />
-                  <TextField
-                    label="Extra info (optional)"
-                    value={extraInfo}
-                    onChangeText={setExtraInfo}
-                    placeholder="Anything drivers should know"
-                    multiline
-                    editable={!submitting}
-                    style={styles.extraInput}
+              {directTo ? (
+                <View style={styles.directPreview}>
+                  <DriverCard
+                    name={(liveTarget ?? directTo).name}
+                    vehicleType={(liveTarget ?? directTo).vehicleType}
+                    detail={[
+                      (liveTarget ?? directTo).availability
+                        ? (liveTarget ?? directTo).availability ===
+                          'available'
+                          ? 'Available'
+                          : (liveTarget ?? directTo).availability === 'busy'
+                            ? 'Busy'
+                            : 'Offline'
+                        : null,
+                      (liveTarget ?? directTo).detail,
+                    ]
+                      .filter(Boolean)
+                      .join(' · ')}
+                    notes={(liveTarget ?? directTo).notes}
+                    photoUri={(liveTarget ?? directTo).photoUri}
+                    vehicleInteriorUri={
+                      (liveTarget ?? directTo).vehicleInteriorUri
+                    }
+                    vehicleExteriorUri={
+                      (liveTarget ?? directTo).vehicleExteriorUri
+                    }
+                    coordinate={
+                      mapReady
+                        ? mapCoordinate(liveTarget ?? directTo)
+                        : null
+                    }
+                    showMap={isOnline(
+                      (liveTarget ?? directTo).availability,
+                    )}
+                    availability={
+                      (liveTarget ?? directTo).availability ?? 'offline'
+                    }
                   />
                 </View>
-              </Pressable>
+              ) : null}
+
+              <View style={styles.fields}>
+                <TextField
+                  label="Title"
+                  value={title}
+                  onChangeText={setTitle}
+                  placeholder="SF to Monticello"
+                  autoCapitalize="words"
+                  error={titleError}
+                  editable={!submitting}
+                  returnKeyType="next"
+                />
+                <TextField
+                  label="Customer phone"
+                  value={formatPhoneDisplay(phone)}
+                  onChangeText={(v) => setPhone(formatPhoneDisplay(v))}
+                  keyboardType="phone-pad"
+                  error={phoneError}
+                  editable={!submitting}
+                  textContentType="telephoneNumber"
+                />
+                <ChoiceGroup
+                  label="Vehicle class"
+                  options={VEHICLE_CLASS_OPTIONS}
+                  value={vehicleClass}
+                  onChange={setVehicleClass}
+                  error={classError}
+                />
+                <NumberStepper
+                  label="Seats"
+                  hint="Passenger seats needed"
+                  value={seats}
+                  min={1}
+                  max={20}
+                  onChange={setSeats}
+                />
+                <ChoiceGroup
+                  label="Trip"
+                  options={TRIP_OPTIONS}
+                  value={tripType}
+                  onChange={setTripType}
+                  error={tripError}
+                />
+                <DateTimeField
+                  label="When"
+                  value={scheduledAt}
+                  onChange={setScheduledAt}
+                  editable={!submitting}
+                />
+                <TextField
+                  label="Address (optional)"
+                  value={address}
+                  onChangeText={setAddress}
+                  placeholder="Pickup or drop-off"
+                  autoCapitalize="words"
+                  editable={!submitting}
+                />
+                <TextField
+                  label="Extra info (optional)"
+                  value={extraInfo}
+                  onChangeText={setExtraInfo}
+                  placeholder="Anything drivers should know"
+                  multiline
+                  editable={!submitting}
+                  style={styles.extraInput}
+                />
+              </View>
 
               {formError ? (
                 <Text style={styles.formError} accessibilityRole="alert">
